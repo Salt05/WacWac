@@ -2,7 +2,9 @@ using UnityEngine;
 
 /// <summary>
 /// Phase 2: handles motion integration (speed smoothing, bounds clamp).
-/// Now uses linear interpolation transitions (no accelDuration/MoveTowards).
+/// Reworked to use a single cubic ease-in-out interpolation for speed transitions
+/// (no two-phase sign-flip special casing). BeginSpeedTransition records the
+/// start speed to avoid jumps when targets change mid-transition.
 /// </summary>
 public sealed class DuckMovement
 {
@@ -23,14 +25,12 @@ public sealed class DuckMovement
 
     // transition
     private bool inTransition;
+    public bool isTransitioning => inTransition;
     private float transitionStartTime;
-    private float transitionTotalTime;
+    private float transitionDuration;
 
-    // two-phase when sign flips
-    private bool twoPhase;
-    private float phaseStartSpeed;
-    private float phaseMidSpeed; // always 0
-    private float phaseEndSpeed;
+    // interpolation endpoints
+    private float startSpeedSigned;
 
     public int lastDirection { get; private set; } = +1;
     public float lastTargetSpeed { get; private set; }
@@ -42,11 +42,8 @@ public sealed class DuckMovement
         targetSpeedSigned = 0f;
         inTransition = false;
         transitionStartTime = 0f;
-        transitionTotalTime = 0f;
-        twoPhase = false;
-        phaseStartSpeed = 0f;
-        phaseMidSpeed = 0f;
-        phaseEndSpeed = 0f;
+        transitionDuration = 0f;
+        startSpeedSigned = 0f;
 
         lastDirection = +1;
         lastTargetSpeed = 0f;
@@ -59,8 +56,10 @@ public sealed class DuckMovement
     }
 
     /// <summary>
-    /// Start a new linear transition towards a signed target speed over transitionTime seconds.
-    /// If sign flips (e.g. +1.0 -> -0.8), it transitions +1.0 -> 0 -> -0.8 with half time each.
+    /// Start a new transition towards a signed target speed over transitionDuration seconds.
+    /// This uses a cubic ease-in-out easing curve for smooth start and stop.
+    /// BeginSpeedTransition records the current speed as the start so changes mid-transition
+    /// do not produce velocity jumps.
     /// </summary>
     public void BeginSpeedTransition(int newDirection, float targetSpeedMagnitude, float transitionTime, float now)
     {
@@ -69,37 +68,46 @@ public sealed class DuckMovement
         float mag = Mathf.Max(0f, targetSpeedMagnitude);
         float desiredSigned = direction * mag;
 
-        transitionTotalTime = Mathf.Max(0f, transitionTime);
+        transitionDuration = Mathf.Max(0f, transitionTime);
         transitionStartTime = now;
 
-        float startSigned = currentSpeedSigned;
+        // Record the current signed speed as the start to avoid jumps when decisions change.
+        startSpeedSigned = currentSpeedSigned;
         targetSpeedSigned = desiredSigned;
 
-        if (transitionTotalTime <= 0.0001f)
+        if (transitionDuration <= 0.0001f)
         {
             currentSpeedSigned = targetSpeedSigned;
             inTransition = false;
-            twoPhase = false;
             return;
         }
 
-        // two-phase when sign changes and non-zero start
-        bool signFlip = (startSigned > 0f && targetSpeedSigned < 0f) || (startSigned < 0f && targetSpeedSigned > 0f);
-        if (signFlip && Mathf.Abs(startSigned) > 0.0001f)
+        inTransition = true;
+    }
+
+    /// <summary>
+    /// Immediately stop any ongoing transition, sampling the current interpolated speed so
+    /// external code (e.g. sprint) can take over cleanly.
+    /// </summary>
+    public void StopTransition()
+    {
+        if (!inTransition) return;
+
+        float now = Time.time;
+        float elapsed = now - transitionStartTime;
+        if (elapsed <= 0f)
         {
-            twoPhase = true;
-            inTransition = true;
-            phaseStartSpeed = startSigned;
-            phaseMidSpeed = 0f;
-            phaseEndSpeed = targetSpeedSigned;
+            currentSpeedSigned = startSpeedSigned;
         }
         else
         {
-            twoPhase = false;
-            inTransition = true;
-            phaseStartSpeed = startSigned;
-            phaseEndSpeed = targetSpeedSigned;
+            float T = Mathf.Max(0.0001f, transitionDuration);
+            float t = Mathf.Clamp01(elapsed / T);
+            float e = EaseCubicInOut(t);
+            currentSpeedSigned = Mathf.Lerp(startSpeedSigned, targetSpeedSigned, e);
         }
+
+        inTransition = false;
     }
 
     public void ApplyAntiStrongReversal(float reversalSpeedThreshold)
@@ -108,7 +116,6 @@ public sealed class DuckMovement
         if (lastDirection == +1 && lastTargetSpeed >= reversalSpeedThreshold && direction == -1 && Mathf.Abs(targetSpeedSigned) >= reversalSpeedThreshold)
         {
             targetSpeedSigned *= 0.5f;
-            phaseEndSpeed = targetSpeedSigned;
         }
 
         lastDirection = direction;
@@ -121,6 +128,15 @@ public sealed class DuckMovement
         else if (x >= maxPosX) direction = -1;
     }
 
+    private static float EaseCubicInOut(float t)
+    {
+        // f(t) = (t < 0.5 ? 4t^3 : 1 - ((-2t + 2)^3) / 2)
+        if (t < 0.5f)
+            return 4f * t * t * t;
+        float k = -2f * t + 2f;
+        return 1f - (k * k * k) / 2f;
+    }
+
     public void StepSpeed(float now)
     {
         if (!inTransition) return;
@@ -128,39 +144,17 @@ public sealed class DuckMovement
         float elapsed = now - transitionStartTime;
         if (elapsed <= 0f) return;
 
-        float T = Mathf.Max(0.0001f, transitionTotalTime);
+        float T = Mathf.Max(0.0001f, transitionDuration);
 
-        if (!twoPhase)
-        {
-            float t = Mathf.Clamp01(elapsed / T);
-            currentSpeedSigned = Mathf.Lerp(phaseStartSpeed, phaseEndSpeed, t);
-            if (t >= 1f)
-            {
-                currentSpeedSigned = phaseEndSpeed;
-                inTransition = false;
-            }
-            return;
-        }
+        float t = Mathf.Clamp01(elapsed / T);
+        float e = EaseCubicInOut(t);
 
-        // Two-phase: first half to 0, second half to end.
-        float half = T * 0.5f;
-        if (elapsed >= T)
+        currentSpeedSigned = Mathf.Lerp(startSpeedSigned, targetSpeedSigned, e);
+
+        if (t >= 1f)
         {
-            currentSpeedSigned = phaseEndSpeed;
+            currentSpeedSigned = targetSpeedSigned;
             inTransition = false;
-            twoPhase = false;
-            return;
-        }
-
-        if (elapsed <= half)
-        {
-            float t1 = Mathf.Clamp01(elapsed / half);
-            currentSpeedSigned = Mathf.Lerp(phaseStartSpeed, 0f, t1);
-        }
-        else
-        {
-            float t2 = Mathf.Clamp01((elapsed - half) / half);
-            currentSpeedSigned = Mathf.Lerp(0f, phaseEndSpeed, t2);
         }
     }
 
@@ -185,7 +179,6 @@ public sealed class DuckMovement
             // stop at bounds
             currentSpeedSigned = 0f;
             inTransition = false;
-            twoPhase = false;
         }
 
         return x;

@@ -84,8 +84,8 @@ public class DuckMover : MonoBehaviour
 
         brain.Reset(rng, Time.time);
 
-        // apply tier color for debugging
-        if (visualizer != null) visualizer.ApplyTierColor(stats.tier);
+        // apply tier color for debugging -- DISABLED to keep duck visuals fixed
+        // if (visualizer != null) visualizer.ApplyTierColor(stats.tier);
     }
 
     private static int HashSeed(int raceSessionSeed, int duckIndex)
@@ -214,8 +214,8 @@ public class DuckMover : MonoBehaviour
             int dir = movement.direction;
             if (flip) dir = -dir;
 
-            // For minimal: use a short transition for visual smoothness.
-            float transitionTime = Mathf.Max(0f, interval / 3f);
+            // For minimal: use a noticeable transition for visual smoothness.
+            float transitionTime = Mathf.Max(0.5f, interval / 3f);
             movement.BeginSpeedTransition(dir, target, transitionTime, now);
             movement.GuardDirectionAtBounds(transform.position.x);
         }
@@ -272,6 +272,9 @@ public class DuckMover : MonoBehaviour
         float effectiveC = brain.GetEffectiveRandomInterval(randomIntervalC, stats != null ? stats.personality : DuckStats.Personality.Steady);
         float transitionTime = brain.GetSpeedTransitionTime(effectiveC);
 
+        // Enforce a minimum transition time so easing is noticeable
+        transitionTime = Mathf.Max(transitionTime, 0.5f);
+
         var decision = brain.DecideTarget(
             now,
             stats,
@@ -293,10 +296,9 @@ public class DuckMover : MonoBehaviour
 
             float desiredSpeed = decision.targetSpeed * mult;
 
-            // Begin linear transition (two-phase if direction flips).
+            // Begin transition using cubic easing inside DuckMovement
             movement.BeginSpeedTransition(decision.direction, desiredSpeed, transitionTime, now);
             movement.GuardDirectionAtBounds(transform.position.x);
-            movement.ApplyAntiStrongReversal(1.5f);
 
             if (decision.directionChanged && mode == TickMode.Full)
                 brain.ResetMomentum();
@@ -335,6 +337,7 @@ public class DuckMover : MonoBehaviour
 
     private void StepSprint(float dt)
     {
+        // Use easing-based speed interpolation during sprint; movement will own speed blending.
         if (sprintTimeRemaining <= 0f)
         {
             Vector3 p0 = transform.position;
@@ -345,13 +348,8 @@ public class DuckMover : MonoBehaviour
             return;
         }
 
-        // Integrate sprint speed using explicit acceleration (independent of brain transitions)
-        float v = movement.currentSpeed + sprintAccel * dt;
-        v = Mathf.Max(0f, v);
-
-        int dir = (sprintTargetWorldX >= transform.position.x) ? +1 : -1;
-        // Store sprint speed in movement as signed speed so minimal/regular movement stays consistent.
-        movement.BeginSpeedTransition(dir, v, 0f, Time.time); // immediate set
+        // Advance movement easing based on absolute time
+        movement.StepSpeed(Time.time);
 
         Vector3 p = transform.position;
         p.x += movement.currentSpeedSigned * dt;
@@ -361,6 +359,7 @@ public class DuckMover : MonoBehaviour
         p.x = clampedX;
 
         // check overshoot / reached
+        int dir = (sprintTargetWorldX >= transform.position.x) ? +1 : -1;
         if ((dir > 0 && p.x >= sprintTargetWorldX) || (dir < 0 && p.x <= sprintTargetWorldX))
         {
             p.x = sprintTargetWorldX;
@@ -416,6 +415,9 @@ public class DuckMover : MonoBehaviour
         // Clamp target within bounds to avoid sprinting outside the lane.
         float clampedTarget = Mathf.Clamp(targetWorldX, movement.minPosX, movement.maxPosX);
 
+        // Immediately cancel any ongoing easing transition so sprint uses explicit acceleration
+        movement.StopTransition();
+
         sprintTargetWorldX = clampedTarget;
         sprintTotalTime = Mathf.Max(0.0001f, totalTime);
         sprintTimeRemaining = sprintTotalTime;
@@ -431,15 +433,18 @@ public class DuckMover : MonoBehaviour
             return;
         }
 
-        float v0 = movement.currentSpeed;
-        float v1 = (2f * distance / sprintTotalTime) - v0;
+        int dir = (sprintTargetWorldX > x) ? +1 : -1;
+
+        // sample signed speed along sprint direction (positive if already moving toward target)
+        float v0_along = movement.currentSpeedSigned * dir; // can be negative if moving opposite
+        float v1 = (2f * distance / sprintTotalTime) - v0_along;
         v1 = Mathf.Max(0f, v1);
 
+        // apply computed sprint final speed and start easing-based sprint
         sprintFinalSpeed = v1;
-        sprintAccel = (sprintFinalSpeed - v0) / sprintTotalTime;
+        sprintAccel = (sprintFinalSpeed - Mathf.Max(0f, movement.currentSpeed)) / sprintTotalTime;
 
-        int dir = (sprintTargetWorldX > x) ? +1 : -1;
-        movement.BeginSpeedTransition(dir, movement.currentSpeed, 0f, Time.time);
+        movement.BeginSpeedTransition(dir, sprintFinalSpeed, sprintTotalTime, Time.time);
     }
 
     public void StopSprint()

@@ -61,23 +61,6 @@ public sealed class DuckVisualizer : MonoBehaviour
         }
     }
 
-    public void ApplyTierColor(DuckStats.Tier tier)
-    {
-        Color c = GetTierColor(tier);
-
-        if (uiImage != null)
-        {
-            uiImage.color = c;
-        }
-
-        if (worldRenderer != null)
-        {
-            // Use material instance to avoid changing shared material.
-            var mat = worldRenderer.material;
-            if (mat != null) mat.color = c;
-        }
-    }
-
     public void InitializeStaminaBar()
     {
         if (staminaRoot != null) return;

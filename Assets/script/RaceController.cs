@@ -59,6 +59,12 @@ public class RaceController : MonoBehaviour
 
     private bool hasSpawned = false;
 
+    // Flag that indicates this controller is in a "fresh" state where Start is allowed to initialize the race.
+    // Fresh means: just loaded (from setup) and spawning has completed, or the user pressed Clear.
+    // Once Start is pressed for the first time in this fresh session, this flag becomes false and Start will
+    // no longer perform initialization that could affect spawn/skins; it will only be used to resume from Paused.
+    private bool freshStart = false;
+
     private readonly List<DuckMover> duckMovers = new List<DuckMover>();
     private readonly List<Vector3> initialPositions = new List<Vector3>();
     private readonly List<Quaternion> initialRotations = new List<Quaternion>();
@@ -189,6 +195,9 @@ public class RaceController : MonoBehaviour
 
         if (loadingPanel != null) loadingPanel.SetActive(false);
         state = State.Ready;
+
+        // Mark this session as fresh: Start should be allowed to initialize/run the race.
+        freshStart = true;
     }
 
     private IEnumerator SpawnDucksStaggered()
@@ -732,7 +741,16 @@ public class RaceController : MonoBehaviour
     // --- Button callbacks ---
     private void OnStartPressed()
     {
-        if (state != State.Ready && state != State.Paused) return;
+        // Allow Continue button to resume when paused
+        if (state == State.Paused)
+        {
+            OnContinuePressed();
+            return;
+        }
+
+        // Only allow starting when in Ready state and this is a fresh session (just loaded from setup or after Clear)
+        if (state != State.Ready) return;
+        if (!freshStart) return;
 
         // New session seed each time user starts a race.
         raceSessionSeed = unchecked(Environment.TickCount ^ (int)DateTime.UtcNow.Ticks);
@@ -766,6 +784,10 @@ public class RaceController : MonoBehaviour
             // pass computed clamp X values (world-space)
             d.ApplyRaceParams(speedMinA, speedMaxB, randomIntervalC, stopDuckTimeD, MinPosX, MaxPosX);
         }
+
+        // After the first valid Start in a fresh session, mark as not fresh anymore so subsequent Start presses
+        // won't re-initialize or otherwise affect spawn/skins.
+        freshStart = false;
     }
 
     private void OnPausePressed()
@@ -828,6 +850,9 @@ public class RaceController : MonoBehaviour
 
         var scrollers = FindObjectsOfType<Scroller>();
         foreach (var sc in scrollers) sc.ResetToStart();
+
+        // After a Clear, allow Start to initialize the race again.
+        freshStart = true;
     }
 
     private void OnBackPressed()
