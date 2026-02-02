@@ -139,9 +139,17 @@ public class SetupController : MonoBehaviour
         int seconds = timeDigits.Count == 0 ? defaultTimeSeconds : SecondsFromDigits(timeDigits);
         int ducks = duckDigits.Count == 0 ? defaultDuckCount : IntFromDigits(duckDigits);
 
-        // clamp
-        if (ducks < 1) ducks = 1;
-        if (ducks > 100) ducks = 100;
+        // Clamp to minimums: time >= 10s, ducks >= 3
+        const int MinTimeSeconds = 10;
+        const int MinDuckCount = 3;
+        if (seconds < MinTimeSeconds)
+        {
+            seconds = MinTimeSeconds;
+        }
+        if (ducks < MinDuckCount)
+        {
+            ducks = MinDuckCount;
+        }
 
         // Ensure RaceConfig exists in SetupScene; do NOT auto-create it here to avoid duplicates
         if (RaceConfig.Instance == null)

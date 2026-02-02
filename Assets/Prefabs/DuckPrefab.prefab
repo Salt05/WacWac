@@ -11,6 +11,7 @@ GameObject:
   - component: {fileID: 864980875075777831}
   - component: {fileID: 3382316241735076929}
   - component: {fileID: 7802293831620680453}
+  - component: {fileID: -8903414524502669669}
   m_Layer: 5
   m_Name: DuckPrefab
   m_TagString: Duck
@@ -104,6 +105,26 @@ SpriteRenderer:
   m_WasSpriteAssigned: 0
   m_MaskInteraction: 0
   m_SpriteSortPoint: 0
+--- !u!114 &-8903414524502669669
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 310335497211688468}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9817be90f124df945aac18a09d6b2de7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  uiImage: {fileID: 0}
+  worldRenderer: {fileID: 0}
+  showStaminaBar: 0
+  staminaBarOffset: {x: 0, y: 1, z: 0}
+  staminaBarSize: {x: 1.2, y: 0.18}
+  staminaBarBorder: 0.02
+  bobHeight: 25
+  bobDuration: 2
 --- !u!1 &1323896612055221651
 GameObject:
   m_ObjectHideFlags: 0

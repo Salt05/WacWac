@@ -27,6 +27,17 @@ public class DuckMover : MonoBehaviour
     private float sprintAccel = 0f;
     private float sprintFinalSpeed = 0f;
 
+    // --- Allow temporary expansion of movement bounds during sprint ---
+    private bool sprintExpandedBounds = false;
+    private float savedMaxPosX = 0f;
+
+    // --- Time of arrival at finish (world X). -1 = not reached yet. ---
+    private float timeReachedFinish = -1f;
+    private const float FinishEpsilon = 0.001f;
+
+    // --- Slow-down when approaching bound ---
+    private bool isSlowingForBound = false;
+
     // --- RNG + stats ---
     private System.Random rng;
     private DuckStats stats;
@@ -71,6 +82,10 @@ public class DuckMover : MonoBehaviour
         movement.Reset();
         nextRandomTime = Time.time;
         enabled = true;
+
+        // reset finish time state
+        timeReachedFinish = -1f;
+        isSlowingForBound = false;
     }
 
     private void ReseedRng()
@@ -155,6 +170,10 @@ public class DuckMover : MonoBehaviour
         ReseedRng();
 
         if (nextRandomTime < Time.time) nextRandomTime = Time.time;
+
+        // reset finish time
+        timeReachedFinish = -1f;
+        isSlowingForBound = false;
     }
 
     private void Update()
@@ -225,6 +244,12 @@ public class DuckMover : MonoBehaviour
         Vector3 pos = transform.position;
         pos.x = x;
         transform.position = pos;
+
+        // check finish crossing
+        CheckFinishCrossing();
+
+        // clear slowing flag if we've come to rest
+        if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
     }
 
     private enum TickMode { Full, Simplified }
@@ -246,6 +271,11 @@ public class DuckMover : MonoBehaviour
         if (inSprintPhase && isSprint)
         {
             StepSprint(dt);
+            // check finish crossing
+            CheckFinishCrossing();
+
+            // clear slowing flag if we've come to rest
+            if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
             return;
         }
 
@@ -257,6 +287,12 @@ public class DuckMover : MonoBehaviour
             Vector3 pLock = transform.position;
             pLock.x = xLock;
             transform.position = pLock;
+
+            // check finish crossing
+            CheckFinishCrossing();
+
+            // clear slowing flag if we've come to rest
+            if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
             return;
         }
 
@@ -311,6 +347,12 @@ public class DuckMover : MonoBehaviour
         Vector3 pos = transform.position;
         pos.x = x;
         transform.position = pos;
+
+        // check finish crossing
+        CheckFinishCrossing();
+
+        // clear slowing flag if we've come to rest
+        if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
     }
 
     private void UpdateStamina(float dt)
@@ -345,6 +387,14 @@ public class DuckMover : MonoBehaviour
             transform.position = p0;
             isSprint = false;
             movement.Reset();
+
+            // restore expanded bounds if any
+            if (sprintExpandedBounds)
+            {
+                movement.maxPosX = savedMaxPosX;
+                sprintExpandedBounds = false;
+            }
+
             return;
         }
 
@@ -354,7 +404,7 @@ public class DuckMover : MonoBehaviour
         Vector3 p = transform.position;
         p.x += movement.currentSpeedSigned * dt;
 
-        // clamp within lane bounds
+        // clamp within lane bounds (movement.maxPosX may have been temporarily expanded)
         float clampedX = Mathf.Clamp(p.x, movement.minPosX, movement.maxPosX);
         p.x = clampedX;
 
@@ -365,6 +415,13 @@ public class DuckMover : MonoBehaviour
             p.x = sprintTargetWorldX;
             isSprint = false;
             movement.Reset();
+
+            // restore expanded bounds if any
+            if (sprintExpandedBounds)
+            {
+                movement.maxPosX = savedMaxPosX;
+                sprintExpandedBounds = false;
+            }
         }
 
         transform.position = p;
@@ -377,7 +434,47 @@ public class DuckMover : MonoBehaviour
             transform.position = pp;
             isSprint = false;
             movement.Reset();
+
+            if (sprintExpandedBounds)
+            {
+                movement.maxPosX = savedMaxPosX;
+                sprintExpandedBounds = false;
+            }
         }
+
+        // check finish crossing
+        CheckFinishCrossing();
+
+        // clear slowing flag if we've come to rest
+        if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
+    }
+
+    private void CheckFinishCrossing()
+    {
+        if (raceController == null) return;
+        if (timeReachedFinish >= 0f) return; // already recorded
+
+        float finishWorldX = raceController.GetFinishWorldX();
+        if (float.IsNaN(finishWorldX)) return;
+
+        if (transform.position.x + FinishEpsilon >= finishWorldX)
+        {
+            timeReachedFinish = Time.time;
+            Debug.Log("Duck index " + duckIndex + " reached finish at " + timeReachedFinish.ToString("F4") + " worldX=" + transform.position.x.ToString("F3"));
+        }
+    }
+
+    // Notify this duck that it's approaching its movement bound and should slow down over decelTime seconds.
+    public void NotifyApproachingBound(float decelTime)
+    {
+        if (isSprint) return;
+        if (timeReachedFinish >= 0f) return;
+        if (isSlowingForBound) return;
+
+        int dir = movement.direction;
+        // Begin transition to zero speed over decelTime for a smooth stop.
+        movement.BeginSpeedTransition(dir, 0f, Mathf.Max(0.05f, decelTime), Time.time);
+        isSlowingForBound = true;
     }
 
     public void ResetToInitial(Vector3 pos, Quaternion rot)
@@ -391,6 +488,16 @@ public class DuckMover : MonoBehaviour
 
         if (stats != null) stats.stamina01 = 1f;
         minimalTickAccumulator = 0f;
+
+        // reset finish time
+        timeReachedFinish = -1f;
+
+        // restore expanded bounds just in case
+        if (sprintExpandedBounds)
+        {
+            movement.maxPosX = savedMaxPosX;
+            sprintExpandedBounds = false;
+        }
     }
 
     public float GetWorldX() => transform.position.x;
@@ -408,11 +515,27 @@ public class DuckMover : MonoBehaviour
 
     public DuckStats.Personality GetPersonality() => stats != null ? stats.personality : DuckStats.Personality.Steady;
 
+    public float GetTimeReachedFinish() => timeReachedFinish;
+
+    public int GetDuckIndex() => duckIndex;
+
+    public float GetMaxPosX() => movement.maxPosX;
+
+    public bool IsSlowingForBound() => isSlowingForBound;
+
     public void StartSprintToWorldX(float targetWorldX, float totalTime)
     {
         if (float.IsNaN(targetWorldX) || totalTime <= 0f) return;
 
-        // Clamp target within bounds to avoid sprinting outside the lane.
+        // Allow sprint target beyond current movement.maxPosX by temporarily expanding the bound for this duck only.
+        if (movement.maxPosX < targetWorldX)
+        {
+            savedMaxPosX = movement.maxPosX;
+            movement.maxPosX = targetWorldX;
+            sprintExpandedBounds = true;
+        }
+
+        // Clamp target within bounds to avoid sprinting outside the lane (movement.maxPosX may have been expanded above).
         float clampedTarget = Mathf.Clamp(targetWorldX, movement.minPosX, movement.maxPosX);
 
         // Immediately cancel any ongoing easing transition so sprint uses explicit acceleration
@@ -430,6 +553,12 @@ public class DuckMover : MonoBehaviour
         {
             isSprint = false;
             movement.Reset();
+
+            if (sprintExpandedBounds)
+            {
+                movement.maxPosX = savedMaxPosX;
+                sprintExpandedBounds = false;
+            }
             return;
         }
 
@@ -454,5 +583,14 @@ public class DuckMover : MonoBehaviour
         sprintTotalTime = 0f;
         sprintAccel = 0f;
         sprintFinalSpeed = 0f;
+
+        if (sprintExpandedBounds)
+        {
+            movement.maxPosX = savedMaxPosX;
+            sprintExpandedBounds = false;
+        }
+
+        // cancel any bound slow
+        isSlowingForBound = false;
     }
 }

@@ -54,6 +54,13 @@ public class RaceController : MonoBehaviour
     [Tooltip("Total race time in seconds")]
     public float totalRaceTime;
 
+    [Header("Bound Approach")]
+    [Tooltip("Distance (world units) from a duck's movement max at which it should begin slowing down.")]
+    public float boundApproachThreshold = 0.5f;
+
+    [Tooltip("Seconds over which a non-chosen duck should decelerate when approaching the bound.")]
+    public float boundDecelTime = 0.5f;
+
     private enum State { Loading, Ready, Running, Paused }
     private State state = State.Loading;
 
@@ -138,6 +145,9 @@ public class RaceController : MonoBehaviour
     private Camera mainCam;
 
     private float nextRankingUpdateTime;
+
+    // small epsilon for tie/time comparisons
+    private const float FinishTimeEpsilon = 0.001f;
 
     private void Start()
     {
@@ -439,6 +449,12 @@ public class RaceController : MonoBehaviour
                     }
                 }
             }
+        }
+
+        // Notify non-chosen ducks approaching their movement bounds to decelerate smoothly
+        if (finishMoveStarted && !finishReachedTarget)
+        {
+            NotifyDucksApproachingBound();
         }
 
         remainingTime -= Time.deltaTime;
@@ -905,7 +921,27 @@ public class RaceController : MonoBehaviour
         var movers = new List<DuckMover>();
         foreach (var d in duckMovers) if (d != null) movers.Add(d);
 
-        movers.Sort((a, b) => b.GetWorldX().CompareTo(a.GetWorldX()));
+        // Sort with primary = timeReachedFinish (earlier wins), secondary = worldX, tertiary = duckIndex deterministic
+        movers.Sort((a, b) =>
+        {
+            float at = a.GetTimeReachedFinish();
+            float bt = b.GetTimeReachedFinish();
+            bool aFin = at >= 0f;
+            bool bFin = bt >= 0f;
+
+            if (aFin && bFin)
+            {
+                if (Mathf.Abs(at - bt) > FinishTimeEpsilon) return at.CompareTo(bt); // earlier first
+                return a.GetDuckIndex().CompareTo(b.GetDuckIndex());
+            }
+            if (aFin) return -1; // finished ducks rank above non-finished
+            if (bFin) return 1;
+
+            int cmp = b.GetWorldX().CompareTo(a.GetWorldX());
+            if (cmp != 0) return cmp;
+            return a.GetDuckIndex().CompareTo(b.GetDuckIndex());
+        });
+
         return movers;
     }
 
@@ -941,10 +977,25 @@ public class RaceController : MonoBehaviour
             return;
         }
 
-        // sort by world X descending (leader first)
-        runners.Sort((a, b) => b.GetWorldX().CompareTo(a.GetWorldX()));
+        // Exclude ducks that already reached finish
+        var candidates = new List<DuckMover>();
+        foreach (var runner in runners)
+        {
+            if (runner.GetTimeReachedFinish() < 0f) candidates.Add(runner);
+        }
 
-        int topN = Mathf.Min(9, runners.Count);
+        if (candidates.Count < 3)
+        {
+            // not enough non-finished ducks to perform selection
+            chosenDuck = null;
+            Debug.Log("Selection skipped: not enough non-finished candidates");
+            return;
+        }
+
+        // sort by world X descending (leader first)
+        candidates.Sort((a, b) => b.GetWorldX().CompareTo(a.GetWorldX()));
+
+        int topN = Mathf.Min(9, candidates.Count);
 
         // determine mode based on total runners (mốc)
         // mốc1: 3..5 => [100]
@@ -953,12 +1004,12 @@ public class RaceController : MonoBehaviour
 
         float[] tierProbs;
         int modeCount = 0;
-        if (runners.Count <= 5)
+        if (candidates.Count <= 5)
         {
             tierProbs = new float[] { 1.0f };
             modeCount = 1;
         }
-        else if (runners.Count <= 8)
+        else if (candidates.Count <= 8)
         {
             tierProbs = new float[] { 0.7f, 0.3f };
             modeCount = 2;
@@ -977,7 +1028,7 @@ public class RaceController : MonoBehaviour
         {
             int tierIndex = i / 3; // 0 -> tier1 (0..2), 1 -> tier2 (3..5), 2 -> tier3 (6..8)
             if (tierIndex < modeCount)
-                tiers[tierIndex].Add(runners[i]);
+                tiers[tierIndex].Add(candidates[i]);
         }
 
         // If for some reason all tiers empty (shouldn't), abort
@@ -1012,16 +1063,16 @@ public class RaceController : MonoBehaviour
         }
 
         // pick uniformly among members of chosen tier
-        var candidates = tiers[chosenTier];
-        if (candidates.Count == 0)
+        var candidatesTier = tiers[chosenTier];
+        if (candidatesTier.Count == 0)
         {
             chosenDuck = null;
             Debug.LogWarning("Selection found no candidates after fallback");
             return;
         }
 
-        int idx = UnityEngine.Random.Range(0, candidates.Count);
-        chosenDuck = candidates[idx];
+        int idx = UnityEngine.Random.Range(0, candidatesTier.Count);
+        chosenDuck = candidatesTier[idx];
 
         string chosenInfo;
         if (chosenDuck != null) chosenInfo = chosenDuck.GetWorldX().ToString();
@@ -1034,6 +1085,9 @@ public class RaceController : MonoBehaviour
     {
         if (leader == null) { leaderSprintStarted = true; return; }
         if (leader.IsSprinting()) { leaderSprintStarted = true; return; }
+
+        // do not start sprint for a duck that already reached finish
+        if (leader.GetTimeReachedFinish() >= 0f) { leaderSprintStarted = true; return; }
 
         CacheFinishRects();
 
@@ -1049,5 +1103,42 @@ public class RaceController : MonoBehaviour
 
         leader.StartSprintToWorldX(finishTargetWorldX, remainingTime);
         leaderSprintStarted = true;
+    }
+
+    // Expose finish target in world-space for ducks to detect crossing
+    public float GetFinishWorldX()
+    {
+        CacheFinishRects();
+        RectTransform finishParent = finishRect != null ? finishRect.parent as RectTransform : null;
+        if (finishParent == null) return float.NaN;
+        Vector3 worldPoint = finishParent.TransformPoint(new Vector3(finishFinalTargetX, 0f, 0f));
+        return worldPoint.x;
+    }
+
+    // Notify ducks that are within boundApproachThreshold of their movement max (except chosenDuck)
+    private void NotifyDucksApproachingBound()
+    {
+        if (duckMovers == null || duckMovers.Count == 0) return;
+
+        for (int i = 0; i < duckMovers.Count; i++)
+        {
+            var d = duckMovers[i];
+            if (d == null) continue;
+            if (d == chosenDuck) continue;
+            if (d.IsSprinting()) continue;
+            if (d.GetTimeReachedFinish() >= 0f) continue;
+
+            float maxPos = d.GetMaxPosX();
+            float wx = d.GetWorldX();
+
+            // If already beyond maxPos (shouldn't happen) skip
+            if (wx >= maxPos) continue;
+
+            float remaining = maxPos - wx;
+            if (remaining <= boundApproachThreshold)
+            {
+                d.NotifyApproachingBound(boundDecelTime);
+            }
+        }
     }
 }
