@@ -87,6 +87,10 @@ public class RaceController : MonoBehaviour
     // leader sprint
     private bool leaderSprintStarted;
 
+    // selection for dramatic sprint: choose one duck 0.5s before sprint
+    private bool selectionDone = false;
+    private DuckMover chosenDuck = null;
+
     // ranking
     private List<DuckMover> finalRankingList;
 
@@ -196,8 +200,12 @@ public class RaceController : MonoBehaviour
         if (loadingPanel != null) loadingPanel.SetActive(false);
         state = State.Ready;
 
-        // Mark this session as fresh: Start should be allowed to initialize/run the race.
+        // Mark this session as fresh: Start should be allowed to initialize the race.
         freshStart = true;
+
+        // reset selection state
+        selectionDone = false;
+        chosenDuck = null;
     }
 
     private IEnumerator SpawnDucksStaggered()
@@ -411,9 +419,24 @@ public class RaceController : MonoBehaviour
             if (leaderByRank != null)
             {
                 float leaderEffectiveD = leaderByRank.GetEffectiveStopDuckTimeD(stopDuckTimeD);
+
+                // Selection moment: 0.5s before the leader's effective D
+                if (!selectionDone && remainingTime <= leaderEffectiveD + 0.5f)
+                {
+                    PerformSelection();
+                }
+
                 if (remainingTime <= leaderEffectiveD)
                 {
-                    TryStartLeaderSprint(leaderByRank);
+                    // At actual sprint time: prefer chosenDuck if valid
+                    if (chosenDuck != null && !chosenDuck.IsSprinting())
+                    {
+                        TryStartLeaderSprint(chosenDuck);
+                    }
+                    else
+                    {
+                        TryStartLeaderSprint(leaderByRank);
+                    }
                 }
             }
         }
@@ -853,6 +876,10 @@ public class RaceController : MonoBehaviour
 
         // After a Clear, allow Start to initialize the race again.
         freshStart = true;
+
+        // reset selection state
+        selectionDone = false;
+        chosenDuck = null;
     }
 
     private void OnBackPressed()
@@ -896,6 +923,111 @@ public class RaceController : MonoBehaviour
     public bool IsRunning()
     {
         return state == State.Running;
+    }
+
+    // Perform selection of one duck 0.5s before sprint according to tiered probabilities.
+    private void PerformSelection()
+    {
+        selectionDone = true; // ensure we only select once
+
+        // build current ranking snapshot
+        var runners = new List<DuckMover>();
+        foreach (var d in duckMovers) if (d != null) runners.Add(d);
+        if (runners.Count < 3)
+        {
+            // not enough ducks to perform selection per spec
+            chosenDuck = null;
+            Debug.Log("Selection skipped: less than 3 runners");
+            return;
+        }
+
+        // sort by world X descending (leader first)
+        runners.Sort((a, b) => b.GetWorldX().CompareTo(a.GetWorldX()));
+
+        int topN = Mathf.Min(9, runners.Count);
+
+        // determine mode based on total runners (mốc)
+        // mốc1: 3..5 => [100]
+        // mốc2: 6..8 => [60,40]
+        // mốc3: >=9 => [50,30,20]
+
+        float[] tierProbs;
+        int modeCount = 0;
+        if (runners.Count <= 5)
+        {
+            tierProbs = new float[] { 1.0f };
+            modeCount = 1;
+        }
+        else if (runners.Count <= 8)
+        {
+            tierProbs = new float[] { 0.7f, 0.3f };
+            modeCount = 2;
+        }
+        else
+        {
+            tierProbs = new float[] { 0.7f, 0.2f, 0.1f };
+            modeCount = 3;
+        }
+
+        // build tiers lists
+        var tiers = new List<List<DuckMover>>();
+        for (int i = 0; i < modeCount; i++) tiers.Add(new List<DuckMover>());
+
+        for (int i = 0; i < topN; i++)
+        {
+            int tierIndex = i / 3; // 0 -> tier1 (0..2), 1 -> tier2 (3..5), 2 -> tier3 (6..8)
+            if (tierIndex < modeCount)
+                tiers[tierIndex].Add(runners[i]);
+        }
+
+        // If for some reason all tiers empty (shouldn't), abort
+        int totalCandidates = 0;
+        foreach (var t in tiers) totalCandidates += t.Count;
+        if (totalCandidates == 0)
+        {
+            chosenDuck = null;
+            Debug.LogWarning("Selection aborted: no candidates in tiers");
+            return;
+        }
+
+        // choose tier by probabilities
+        float r = UnityEngine.Random.value;
+        float accum = 0f;
+        int chosenTier = -1;
+        for (int i = 0; i < tierProbs.Length; i++)
+        {
+            accum += tierProbs[i];
+            if (r <= accum)
+            {
+                chosenTier = i;
+                break;
+            }
+        }
+        if (chosenTier == -1) chosenTier = tierProbs.Length - 1;
+
+        // If chosen tier has no members (edge case), fallback to first non-empty tier
+        if (tiers[chosenTier].Count == 0)
+        {
+            for (int i = 0; i < tiers.Count; i++) if (tiers[i].Count > 0) { chosenTier = i; break; }
+        }
+
+        // pick uniformly among members of chosen tier
+        var candidates = tiers[chosenTier];
+        if (candidates.Count == 0)
+        {
+            chosenDuck = null;
+            Debug.LogWarning("Selection found no candidates after fallback");
+            return;
+        }
+
+        int idx = UnityEngine.Random.Range(0, candidates.Count);
+        chosenDuck = candidates[idx];
+
+        string chosenInfo;
+        if (chosenDuck != null) chosenInfo = chosenDuck.GetWorldX().ToString();
+        else chosenInfo = "null";
+
+        Debug.Log("Selected duck for sprint: index=" + chosenInfo + " tier=" + (chosenTier + 1).ToString() + " seedRandom=" + r.ToString());
     }
 
     private void TryStartLeaderSprint(DuckMover leader)

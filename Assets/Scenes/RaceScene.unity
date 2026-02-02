@@ -1739,7 +1739,7 @@ MonoBehaviour:
   speedMinA: 0.1
   speedMaxB: 1
   randomIntervalC: 3
-  stopDuckTimeD: 3
+  stopDuckTimeD: 5
   minPosTransform: {fileID: 1443373914}
   maxPosTransform: {fileID: 1836903777}
   finishTransform: {fileID: 1157727224}
@@ -2889,7 +2889,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 450, y: 0}
+  m_AnchoredPosition: {x: 188.00002, y: 0}
   m_SizeDelta: {x: 100, y: 100}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &1877189203
@@ -3184,7 +3184,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 449, y: 0}
+  m_AnchoredPosition: {x: 337, y: 0}
   m_SizeDelta: {x: 100, y: 100}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1660057539 &9223372036854775807
@@ -3195,6 +3195,6 @@ SceneRoots:
   - {fileID: 1694769502}
   - {fileID: 718784179}
   - {fileID: 762824374}
-  - {fileID: 881278071}
   - {fileID: 1680638016}
+  - {fileID: 881278071}
   - {fileID: 1877189205}
