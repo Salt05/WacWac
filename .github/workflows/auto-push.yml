@@ -1,0 +1,49 @@
+name: Auto Push Data
+
+# This workflow can be manually triggered to commit and push any changes
+on:
+  workflow_dispatch:
+    inputs:
+      commit_message:
+        description: 'Commit message for the changes'
+        required: false
+        default: 'Auto-update data'
+
+jobs:
+  auto-push:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+            echo "Found changes to commit"
+          else
+            echo "changes=false" >> $GITHUB_OUTPUT
+            echo "No changes to commit"
+          fi
+      
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.changes == 'true'
+        run: |
+          git add .
+          git commit -m "${{ github.event.inputs.commit_message }}"
+          git push
+      
+      - name: No changes message
+        if: steps.check_changes.outputs.changes == 'false'
+        run: |
+          echo "✓ No changes detected. Repository is up to date."
