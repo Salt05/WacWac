@@ -395,6 +395,9 @@ public class DuckMover : MonoBehaviour
                 sprintExpandedBounds = false;
             }
 
+            // mark finish if we effectively reached target
+            TryMarkReachedFinishAt(p0.x);
+
             return;
         }
 
@@ -422,6 +425,12 @@ public class DuckMover : MonoBehaviour
                 movement.maxPosX = savedMaxPosX;
                 sprintExpandedBounds = false;
             }
+
+            transform.position = p;
+
+            // mark finish if we effectively reached target
+            TryMarkReachedFinishAt(p.x);
+            return;
         }
 
         transform.position = p;
@@ -440,6 +449,9 @@ public class DuckMover : MonoBehaviour
                 movement.maxPosX = savedMaxPosX;
                 sprintExpandedBounds = false;
             }
+
+            // mark finish if we effectively reached target
+            TryMarkReachedFinishAt(pp.x);
         }
 
         // check finish crossing
@@ -447,6 +459,36 @@ public class DuckMover : MonoBehaviour
 
         // clear slowing flag if we've come to rest
         if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
+    }
+
+    // Helper: if duck reached or was teleported to targetWorldX, record finish time when appropriate.
+    private void TryMarkReachedFinishAt(float worldX)
+    {
+        if (raceController == null) return;
+        if (timeReachedFinish >= 0f) return; // already recorded
+
+        float finishWorldX = raceController.GetFinishWorldX();
+        if (float.IsNaN(finishWorldX))
+        {
+            // If finish world X not available, conservatively mark as reached
+            timeReachedFinish = Time.time;
+            Debug.Log($"Duck index {duckIndex} reached sprint target at {timeReachedFinish:F4} worldX={worldX:F3} (finishWorldX unknown)");
+            return;
+        }
+
+        if (worldX + FinishEpsilon >= finishWorldX)
+        {
+            timeReachedFinish = Time.time;
+            Debug.Log($"Duck index {duckIndex} reached finish at {timeReachedFinish:F4} worldX={worldX:F3}");
+        }
+    }
+
+    // Public: force mark this duck as having reached finish now (used as fallback to ensure at least one finisher)
+    public void ForceMarkReachedFinishNow()
+    {
+        if (timeReachedFinish >= 0f) return;
+        timeReachedFinish = Time.time;
+        Debug.Log($"Duck index {duckIndex} force-marked as reached finish at {timeReachedFinish:F4} worldX={transform.position.x:F3}");
     }
 
     private void CheckFinishCrossing()
@@ -523,9 +565,9 @@ public class DuckMover : MonoBehaviour
 
     public bool IsSlowingForBound() => isSlowingForBound;
 
-    public bool StartSprintToWorldX(float targetWorldX, float totalTime)
+    public void StartSprintToWorldX(float targetWorldX, float totalTime)
     {
-        if (float.IsNaN(targetWorldX) || totalTime <= 0f) return false;
+        if (float.IsNaN(targetWorldX) || totalTime <= 0f) return;
 
         // Allow sprint target beyond current movement.maxPosX by temporarily expanding the bound for this duck only.
         if (movement.maxPosX < targetWorldX)
@@ -559,7 +601,7 @@ public class DuckMover : MonoBehaviour
                 movement.maxPosX = savedMaxPosX;
                 sprintExpandedBounds = false;
             }
-            return false;
+            return;
         }
 
         int dir = (sprintTargetWorldX > x) ? +1 : -1;
@@ -574,8 +616,6 @@ public class DuckMover : MonoBehaviour
         sprintAccel = (sprintFinalSpeed - Mathf.Max(0f, movement.currentSpeed)) / sprintTotalTime;
 
         movement.BeginSpeedTransition(dir, sprintFinalSpeed, sprintTotalTime, Time.time);
-
-        return true;
     }
 
     public void StopSprint()

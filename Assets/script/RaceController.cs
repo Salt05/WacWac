@@ -400,7 +400,7 @@ public class RaceController : MonoBehaviour
             }
 
             Debug.Log(
-                $"time={remainingTime:F4} | finishX={finishRect.anchoredPosition.x:F2} | duckMaxX={frozenDuckMaxX_UI:F2} | finalTargetX={finishFinalTargetX:F2} | autoSpeed={finishAutoSpeed:F2}"
+                $"time={remainingTime:F4} | finishX={(finishRect!=null?finishRect.anchoredPosition.x:0f):F2} | duckMaxX={frozenDuckMaxX_UI:F2} | finalTargetX={finishFinalTargetX:F2} | autoSpeed={finishAutoSpeed:F2}"
             );
         }
 
@@ -438,19 +438,91 @@ public class RaceController : MonoBehaviour
 
                 if (remainingTime <= leaderEffectiveD)
                 {
-                    // At actual sprint time: try chosenDuck first (preserve tier selection), fallback to current leader if that fails.
+                    // Try sequence:
+                    // 1) chosenDuck (if any)
+                    // 2) current leaderByRank
+                    // 3) nearest non-finished duck (fallback)
                     bool started = false;
+                    DuckMover starter = null;
 
-                    if (chosenDuck != null && !chosenDuck.IsSprinting() && chosenDuck.GetTimeReachedFinish() < 0f)
+                    if (chosenDuck != null && !chosenDuck.IsSprinting())
                     {
                         started = TryStartLeaderSprint(chosenDuck);
-                        if (started) leaderSprintStarted = true;
+                        if (!started)
+                        {
+                            Debug.Log("chosenDuck error: will try leader");
+                        }
+                        else
+                        {
+                            starter = chosenDuck;
+                        }
                     }
 
                     if (!started)
                     {
                         started = TryStartLeaderSprint(leaderByRank);
-                        if (started) leaderSprintStarted = true;
+                        if (started)
+                        {
+                            Debug.Log("leaderByRank chosen");
+                            starter = leaderByRank;
+                        }
+                        else
+                        {
+                            Debug.Log("leaderByRank failed");
+                        }
+                    }
+
+                    if (!started)
+                    {
+                        // fallback: nearest (max worldX) non-finished, non-sprinting duck
+                        DuckMover nearest = null;
+                        float bestX = float.NegativeInfinity;
+                        foreach (var d in duckMovers)
+                        {
+                            if (d == null) continue;
+                            if (d.GetTimeReachedFinish() >= 0f) continue;
+                            if (d.IsSprinting()) continue;
+                            float wx = d.GetWorldX();
+                            if (wx > bestX)
+                            {
+                                bestX = wx;
+                                nearest = d;
+                            }
+                        }
+
+                        if (nearest != null)
+                        {
+                            started = TryStartLeaderSprint(nearest);
+                            if (started)
+                            {
+                                chosenDuck = nearest; // adopt for consistency
+                                Debug.Log("fallback: nearest chosen");
+                                starter = nearest;
+                            }
+                            else
+                            {
+                                Debug.Log("fallback failed");
+                                leaderSprintFailAttempts++;
+                            }
+                        }
+                        else
+                        {
+                            Debug.Log("no fallback candidate");
+                            leaderSprintFailAttempts++;
+                        }
+                    }
+
+                    if (started)
+                    {
+                        leaderSprintStarted = true; // only mark when sprint actually began
+                        if (starter != null)
+                            Debug.Log("Leader sprint started");
+                    }
+                    else
+                    {
+                        Debug.Log("Leader sprint: no valid starter found; will retry");
+                        // increment fail counter so we can apply a late fallback
+                        leaderSprintFailAttempts++;
                     }
                 }
             }
@@ -1084,49 +1156,31 @@ public class RaceController : MonoBehaviour
         else chosenInfo = "null";
     }
 
+    // Attempt to start sprint for the specified duck. Returns true if sprint actually started.
     private bool TryStartLeaderSprint(DuckMover leader)
     {
-        if (leader == null)
-        {
-            Debug.LogWarning("TryStartLeaderSprint: leader is null");
-            return false;
-        }
-
-        if (leader.IsSprinting())
-        {
-            // sprint already active
-            Debug.Log("TryStartLeaderSprint: leader already sprinting");
-            return true;
-        }
+        if (leader == null) return false;
+        if (leader.IsSprinting()) return false;
 
         // do not start sprint for a duck that already reached finish
-        if (leader.GetTimeReachedFinish() >= 0f)
-        {
-            Debug.Log("TryStartLeaderSprint: leader already finished");
-            return false;
-        }
+        if (leader.GetTimeReachedFinish() >= 0f) return false;
 
         CacheFinishRects();
 
         RectTransform finishParent = finishRect != null ? finishRect.parent as RectTransform : null;
         if (finishParent == null)
         {
-            Debug.LogWarning("TryStartLeaderSprint: finishParent is null");
             return false;
         }
 
         Vector3 worldPoint = finishParent.TransformPoint(new Vector3(finishFinalTargetX, 0f, 0f));
         float finishTargetWorldX = worldPoint.x;
 
-        bool started = leader.StartSprintToWorldX(finishTargetWorldX, remainingTime);
-        if (started)
-        {
-            Debug.Log($"TryStartLeaderSprint: started sprint for duck {leader.GetDuckIndex()} to x={finishTargetWorldX:F3}");
-            return true;
-        }
+        // Attempt sprint
+        leader.StartSprintToWorldX(finishTargetWorldX, remainingTime);
 
-        Debug.LogWarning($"TryStartLeaderSprint: failed to start sprint for duck {leader.GetDuckIndex()}");
-        return false;
+        // Consider sprint started if the duck reports sprinting after call
+        return leader.IsSprinting();
     }
 
     // Expose finish target in world-space for ducks to detect crossing
@@ -1162,6 +1216,41 @@ public class RaceController : MonoBehaviour
             if (remaining <= boundApproachThreshold)
             {
                 d.NotifyApproachingBound(boundDecelTime);
+            }
+        }
+    }
+
+    private int leaderSprintFailAttempts = 0;
+
+    private void LateFallbackEnsureFinisher()
+    {
+        // If we are very near race end and no duck has been recorded as finished, force the nearest duck to be marked finished.
+        if (!finishMoveStarted) return;
+        if (leaderSprintStarted) return;
+
+        // if we've attempted many times without success or less than 0.2s remaining, force one
+        if (leaderSprintFailAttempts > 20 || remainingTime <= 0.2f)
+        {
+            // find any duck that hasn't finished and mark the max-worldX one
+            DuckMover best = null;
+            float bestX = float.NegativeInfinity;
+            foreach (var d in duckMovers)
+            {
+                if (d == null) continue;
+                if (d.GetTimeReachedFinish() >= 0f) continue;
+                float wx = d.GetWorldX();
+                if (wx > bestX)
+                {
+                    bestX = wx;
+                    best = d;
+                }
+            }
+
+            if (best != null)
+            {
+                best.ForceMarkReachedFinishNow();
+                leaderSprintStarted = true; // avoid doing this repeatedly
+                Debug.LogWarning($"Late fallback: forced duckIndex={best.GetDuckIndex()} as finisher due to leader sprint failures or low remaining time.");
             }
         }
     }
