@@ -12,19 +12,19 @@ on:
 jobs:
   auto-push:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Configure Git
         run: |
           git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-      
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Check for changes
         id: check_changes
         run: |
@@ -35,14 +35,14 @@ jobs:
             echo "changes=false" >> $GITHUB_OUTPUT
             echo "No changes to commit"
           fi
-      
+
       - name: Commit and push changes
         if: steps.check_changes.outputs.changes == 'true'
         run: |
           git add .
           git commit -m "${{ github.event.inputs.commit_message }}"
           git push
-      
+
       - name: No changes message
         if: steps.check_changes.outputs.changes == 'false'
         run: |
