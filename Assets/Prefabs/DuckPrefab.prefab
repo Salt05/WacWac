@@ -123,7 +123,7 @@ MonoBehaviour:
   staminaBarOffset: {x: 0, y: 1, z: 0}
   staminaBarSize: {x: 1.2, y: 0.18}
   staminaBarBorder: 0.02
-  bobHeight: 25
+  bobHeight: 15
   bobDuration: 2
 --- !u!1 &1323896612055221651
 GameObject:

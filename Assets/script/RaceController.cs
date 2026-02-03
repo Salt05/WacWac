@@ -438,14 +438,19 @@ public class RaceController : MonoBehaviour
 
                 if (remainingTime <= leaderEffectiveD)
                 {
-                    // At actual sprint time: prefer chosenDuck if valid
-                    if (chosenDuck != null && !chosenDuck.IsSprinting())
+                    // At actual sprint time: try chosenDuck first (preserve tier selection), fallback to current leader if that fails.
+                    bool started = false;
+
+                    if (chosenDuck != null && !chosenDuck.IsSprinting() && chosenDuck.GetTimeReachedFinish() < 0f)
                     {
-                        TryStartLeaderSprint(chosenDuck);
+                        started = TryStartLeaderSprint(chosenDuck);
+                        if (started) leaderSprintStarted = true;
                     }
-                    else
+
+                    if (!started)
                     {
-                        TryStartLeaderSprint(leaderByRank);
+                        started = TryStartLeaderSprint(leaderByRank);
+                        if (started) leaderSprintStarted = true;
                     }
                 }
             }
@@ -1077,32 +1082,51 @@ public class RaceController : MonoBehaviour
         string chosenInfo;
         if (chosenDuck != null) chosenInfo = chosenDuck.GetWorldX().ToString();
         else chosenInfo = "null";
-
-        Debug.Log("Selected duck for sprint: index=" + chosenInfo + " tier=" + (chosenTier + 1).ToString() + " seedRandom=" + r.ToString());
     }
 
-    private void TryStartLeaderSprint(DuckMover leader)
+    private bool TryStartLeaderSprint(DuckMover leader)
     {
-        if (leader == null) { leaderSprintStarted = true; return; }
-        if (leader.IsSprinting()) { leaderSprintStarted = true; return; }
+        if (leader == null)
+        {
+            Debug.LogWarning("TryStartLeaderSprint: leader is null");
+            return false;
+        }
+
+        if (leader.IsSprinting())
+        {
+            // sprint already active
+            Debug.Log("TryStartLeaderSprint: leader already sprinting");
+            return true;
+        }
 
         // do not start sprint for a duck that already reached finish
-        if (leader.GetTimeReachedFinish() >= 0f) { leaderSprintStarted = true; return; }
+        if (leader.GetTimeReachedFinish() >= 0f)
+        {
+            Debug.Log("TryStartLeaderSprint: leader already finished");
+            return false;
+        }
 
         CacheFinishRects();
 
         RectTransform finishParent = finishRect != null ? finishRect.parent as RectTransform : null;
         if (finishParent == null)
         {
-            leaderSprintStarted = true;
-            return;
+            Debug.LogWarning("TryStartLeaderSprint: finishParent is null");
+            return false;
         }
 
         Vector3 worldPoint = finishParent.TransformPoint(new Vector3(finishFinalTargetX, 0f, 0f));
         float finishTargetWorldX = worldPoint.x;
 
-        leader.StartSprintToWorldX(finishTargetWorldX, remainingTime);
-        leaderSprintStarted = true;
+        bool started = leader.StartSprintToWorldX(finishTargetWorldX, remainingTime);
+        if (started)
+        {
+            Debug.Log($"TryStartLeaderSprint: started sprint for duck {leader.GetDuckIndex()} to x={finishTargetWorldX:F3}");
+            return true;
+        }
+
+        Debug.LogWarning($"TryStartLeaderSprint: failed to start sprint for duck {leader.GetDuckIndex()}");
+        return false;
     }
 
     // Expose finish target in world-space for ducks to detect crossing

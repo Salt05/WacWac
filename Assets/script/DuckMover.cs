@@ -523,9 +523,9 @@ public class DuckMover : MonoBehaviour
 
     public bool IsSlowingForBound() => isSlowingForBound;
 
-    public void StartSprintToWorldX(float targetWorldX, float totalTime)
+    public bool StartSprintToWorldX(float targetWorldX, float totalTime)
     {
-        if (float.IsNaN(targetWorldX) || totalTime <= 0f) return;
+        if (float.IsNaN(targetWorldX) || totalTime <= 0f) return false;
 
         // Allow sprint target beyond current movement.maxPosX by temporarily expanding the bound for this duck only.
         if (movement.maxPosX < targetWorldX)
@@ -559,7 +559,7 @@ public class DuckMover : MonoBehaviour
                 movement.maxPosX = savedMaxPosX;
                 sprintExpandedBounds = false;
             }
-            return;
+            return false;
         }
 
         int dir = (sprintTargetWorldX > x) ? +1 : -1;
@@ -574,6 +574,8 @@ public class DuckMover : MonoBehaviour
         sprintAccel = (sprintFinalSpeed - Mathf.Max(0f, movement.currentSpeed)) / sprintTotalTime;
 
         movement.BeginSpeedTransition(dir, sprintFinalSpeed, sprintTotalTime, Time.time);
+
+        return true;
     }
 
     public void StopSprint()
