@@ -1,14 +1,52 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using TMPro;
 using UnityEngine.UI;
 
-// Manages race lifecycle: LOADING (UI) -> READY -> RUNNING -> PAUSED
-// Finish movement: start moving at stopDuckTimeD with fixed UI speed (anchored units/sec).
+/// <summary>
+/// RaceController - Progress-based Directed Race System
+/// 
+/// Core concepts:
+/// - Outcome-driven: Winner and rankings decided at Start using deterministic seed.
+/// - Progress P: position calculated as x = startX + (P/100) * L
+/// - P range: [-20, 105]
+/// - No physics: pure Transform updates
+/// - 3 Phases: Opening, Midgame, Sprint
+/// </summary>
+public enum RacePhase
+{
+    Opening,    // First 10-15s: scrambled, P in [-10, 30]
+    Midgame,    // Until last 3s: elastic logic, losers drift back, contenders in [10, 60]
+    Sprint      // Last 3s: deterministic move to FinalP
+}
+
 public class RaceController : MonoBehaviour
 {
+    #region Phase Config Data
+
+    /// <summary>
+    /// Configuration for duck behavior in a specific phase.
+    /// All fields are public for Inspector tuning.
+    /// </summary>
+    [System.Serializable]
+    public class PhaseConfig
+    {
+        [Tooltip("Min-Max thời gian (giây) giữa mỗi lần random hành động mới.")]
+        public Vector2 actionFrequencyRange = new Vector2(4f, 6f);
+
+        [Tooltip("Min-Max tốc độ tiến (Forward). Dùng để random tốc độ khi hành động là Tiến.")]
+        public Vector2 forwardSpeedRange = new Vector2(0.1f, 0.5f);
+
+        [Tooltip("Min-Max tốc độ lùi (Backward). Dùng để random tốc độ khi hành động là Lùi.")]
+        public Vector2 backwardSpeedRange = new Vector2(0.1f, 0.3f);
+    }
+
+    #endregion
+
+    #region Inspector Fields
+    
     [Header("UI")]
     public TextMeshProUGUI countdownText;
     public Button startButton;
@@ -17,1241 +55,843 @@ public class RaceController : MonoBehaviour
     public Button clearButton;
     public Button backButton;
 
-    [Header("Spawn / Ducks")]
+    [Header("Anchors")]
+    [Tooltip("RectTransform của vùng Spawn. Vịt được sinh làm con của RectTransform này. Width/Height dùng cho công thức spawn đường chéo.")]
     public RectTransform spawnArea;
-    public Transform duckParent;
-    public GameObject loadingPanel;
-    public float minLoadingTime = 1.0f;
 
-    [Header("Duck Movement Params (Inspector)")]
-    public float speedMinA = 0.5f;
-    public float speedMaxB = 2.0f;
-    public float randomIntervalC = 1.0f;
-    public float stopDuckTimeD = 1.0f;
+    [Tooltip("RectTransform EndPoint (điểm đích mà Winner đạt 100% tiến độ, thường là tâm màn hình hoặc điểm kết thúc đường đua).")]
+    public RectTransform endPoint;
 
-    [Header("Duck Clamp (World Space)")]
-    [Tooltip("Assign Transforms placed at desired min/max clamp X positions in world space. If empty, defaults are used.")]
-    public Transform minPosTransform;
-    public Transform maxPosTransform;
+    [Tooltip("RectTransform của Finish (vạch đích) – đối tượng di chuyển từ phải qua trái và dừng tại EndPoint.")]
+    public RectTransform finishAnchor;
 
-    // Defaults used when transforms are not assigned
-    private const float DefaultMinPosX = -10f;
-    private const float DefaultMaxPosX = 10f;
+    [Header("Duck Spawning")]
+    public GameObject duckPrefab;
 
-    [Header("Finish")]
-    [Tooltip("Existing finish object in the scene (UI RectTransform) - assign here.")]
-    public Transform finishTransform;
+    [Header("Race Config")]
+    [Tooltip("Tổng thời lượng của cuộc đua (giây). Thời gian đếm ngược từ giá trị này về 0.")]
+    public float raceDuration = 30f;
+    
+    [Tooltip("Số lượng vịt trong cuộc đua.")]
+    public int duckCount = 6;
+    
+    [Tooltip("Thời gian nước rút T3 (giây cuối). Khi thời gian còn lại <= giá trị này thì toàn bộ vịt bước vào Phase Sprint.")]
+    [SerializeField] private float sprintDuration = 3f;
 
-    [Tooltip("Optional target object (UI RectTransform) to move finish towards during sprint. If null, finish moves until ducks.")]
-    public Transform finishTargetTransform;
+    [Header("Phase Config - Phase 1 (Opening)")]
+    [Tooltip("Cấu hình hành vi vịt trong Phase 1. Khoảng giá trị thấp hơn Phase 2.")]
+    public PhaseConfig phase1Config = new PhaseConfig
+    {
+        actionFrequencyRange = new Vector2(4f, 6f),
+        forwardSpeedRange = new Vector2(0.1f, 0.5f),
+        backwardSpeedRange = new Vector2(0.1f, 0.3f)
+    };
 
-    [Tooltip("Finish movement speed in UI anchored units per second (used when no target or when not auto-calc).")]
-    public float finishSpeedF = 5f;
+    [Header("Phase Config - Phase 2 (Midgame)")]
+    [Tooltip("Cấu hình hành vi vịt trong Phase 2. Khoảng giá trị cao hơn Phase 1.")]
+    public PhaseConfig phase2Config = new PhaseConfig
+    {
+        actionFrequencyRange = new Vector2(4f, 6f),
+        forwardSpeedRange = new Vector2(0.3f, 0.8f),
+        backwardSpeedRange = new Vector2(0.1f, 0.5f)
+    };
 
-    [Tooltip("Remaining time in seconds (updated while running)")]
-    public float remainingTime;
+    [Header("Phase Timing (Auto-calculated)")]
+    [Tooltip("T_12 = T - T_3. Tổng thời gian cho Phase 1 và Phase 2.")]
+    [SerializeField, HideInInspector] private float phase12Duration;
+    
+    [Tooltip("T_1: Opening phase = 40% of T_12.")]
+    [SerializeField, HideInInspector] private float phase1Duration;
+    
+    [Tooltip("T_2: Midgame phase = 60% of T_12.")]
+    [SerializeField, HideInInspector] private float phase2Duration;
 
-    [Tooltip("Total race time in seconds")]
-    public float totalRaceTime;
+    /// <summary>T3: Sprint duration (set by user)</summary>
+    public float T3 => sprintDuration;
+    
+    /// <summary>T1: Opening phase duration</summary>
+    public float T1 => phase1Duration;
+    
+    /// <summary>T2: Midgame phase duration</summary>
+    public float T2 => phase2Duration;
 
-    [Header("Bound Approach")]
-    [Tooltip("Distance (world units) from a duck's movement max at which it should begin slowing down.")]
-    public float boundApproachThreshold = 0.5f;
+    [Header("Finish Movement (auto)")]
+    [Tooltip("Bật/tắt cơ chế tự động cho Finish di chuyển từ phải qua trái để dừng đúng tại EndPoint vào cuối cuộc đua.")]
+    public bool enableFinishAutoMove = true;
 
-    [Tooltip("Seconds over which a non-chosen duck should decelerate when approaching the bound.")]
-    public float boundDecelTime = 0.5f;
+    [Tooltip("Tốc độ di chuyển của Finish (đơn vị anchored UI mỗi giây). Dương: tự động xác định hướng dựa trên vị trí Start/End.")]
+    public float finishSpeed = 500f;
 
-    private enum State { Loading, Ready, Running, Paused }
-    private State state = State.Loading;
+    #endregion
 
-    private bool hasSpawned = false;
+    #region Runtime State
 
-    // Flag that indicates this controller is in a "fresh" state where Start is allowed to initialize the race.
-    // Fresh means: just loaded (from setup) and spawning has completed, or the user pressed Clear.
-    // Once Start is pressed for the first time in this fresh session, this flag becomes false and Start will
-    // no longer perform initialization that could affect spawn/skins; it will only be used to resume from Paused.
-    private bool freshStart = false;
+    public enum GameState { Loading, Ready, Running, Paused, Finished }
+    private GameState state = GameState.Loading;
 
-    private readonly List<DuckMover> duckMovers = new List<DuckMover>();
-    private readonly List<Vector3> initialPositions = new List<Vector3>();
-    private readonly List<Quaternion> initialRotations = new List<Quaternion>();
+    /// <summary>Distance L = finishAnchor.x - spawnArea.x (calculated once at start)</summary>
+    public float L { get; private set; }
 
-    // finish timing (UI space)
-    private RectTransform finishRect;
-    private RectTransform finishTargetRect;
+    /// <summary>Current countdown time</summary>
+    public float CurrentTime { get; private set; }
 
-    // snapshot when ducks freeze / movement control
-    private bool finishMoveStarted;
-    private bool finishReachedTarget;
-    private float finishStartX;
-    private float frozenDuckMaxX_UI;
+    /// <summary>Total race duration</summary>
+    public float TotalTime => raceDuration;
 
-    // auto-speed for finish when target provided
-    private bool useAutoFinishSpeed;
-    private float finishAutoSpeed; // anchored units/sec
-    private float finishFinalTargetX;
+    /// <summary>Legacy compatibility: remaining time alias for CurrentTime.</summary>
+    public float remainingTime => CurrentTime;
 
-    // leader sprint
-    private bool leaderSprintStarted;
+    /// <summary>Current race phase</summary>
+    public RacePhase CurrentPhase { get; private set; }
 
-    // selection for dramatic sprint: choose one duck 0.5s before sprint
-    private bool selectionDone = false;
-    private DuckMover chosenDuck = null;
+    /// <summary>Deterministic random seed for this race</summary>
+    public int RaceSeed { get; private set; }
 
-    // ranking
-    private List<DuckMover> finalRankingList;
+    /// <summary>All duck brains in this race</summary>
+    private readonly List<DuckBrain> ducks = new List<DuckBrain>();
 
-    private float previousTimeScale = 1f;
+    /// <summary>Winner duck ID (decided at start)</summary>
+    public int WinnerDuckId { get; private set; }
 
-    // Computed clamp X values (world-space)
-    private float MinPosX => minPosTransform != null ? minPosTransform.position.x : DefaultMinPosX;
-    private float MaxPosX => maxPosTransform != null ? maxPosTransform.position.x : DefaultMaxPosX;
+    /// <summary>Final rankings (DuckID sorted by FinalP descending)</summary>
+    private List<int> finalRankings = new List<int>();
 
-    /// <summary>
-    /// Random seed created per "race session" so duck RNG can be deterministic and replayable.
-    /// DuckMover combines this with duckIndex.
-    /// </summary>
-    [NonSerialized]
-    public int raceSessionSeed;
+    /// <summary>Shared RNG for deterministic behavior</summary>
+    private System.Random rng;
 
-    // --- Phase 1.5: live ranking cache (world X) ---
-    private readonly List<DuckMover> runningRanking = new List<DuckMover>();
-    private readonly Dictionary<DuckMover, int> runningRankByDuck = new Dictionary<DuckMover, int>();
+    // --- Finish auto-move state ---
+    private float finishTravelTime;   // Thời gian cần để Finish đi từ vị trí ban đầu tới EndPoint với finishSpeed
+    private float finishStartTime;    // Thời gian còn lại (CurrentTime) khi Finish bắt đầu di chuyển
+    private bool finishMoving;        // Cờ đang di chuyển Finish
 
-    [Header("Ranking (Runtime)")]
-    [Tooltip("How often to recompute live rankings while running (seconds). Lower = more accurate, higher = cheaper.")]
-    [Range(0.02f, 0.5f)]
-    public float rankingUpdateInterval = 0.10f;
+    // --- Finish initial position (for reset on Clear) ---
+    private Vector2 finishInitialAnchoredPosition;
+    private bool finishInitialPositionSaved;
 
-    [Header("Batch Duck Update / LOD")]
-    public bool useBatchDuckUpdate = true;
+    #endregion
 
-    [Tooltip("Distance for FULL update (all systems).")]
-    public float duckLodFullDistance = 30f;
-
-    [Tooltip("Distance for SIMPLIFIED update (no momentum/comeback).")]
-    public float duckLodMediumDistance = 100f;
-
-    [Tooltip("If beyond medium distance, MINIMAL update is used.")]
-    public float duckLodMinimalDistance = 250f;
-
-    [Header("Spawning Performance")]
-    public bool staggerSpawn = true;
-
-    [Tooltip("Seconds between duck instantiations when staggerSpawn is enabled.")]
-    [Range(0f, 0.2f)]
-    public float staggerSpawnInterval = 0.02f;
-
-    private Camera mainCam;
-
-    private float nextRankingUpdateTime;
-
-    // small epsilon for tie/time comparisons
-    private const float FinishTimeEpsilon = 0.001f;
+    #region Unity Lifecycle
 
     private void Start()
     {
-        // Create a session seed once per race controller lifetime.
-        // This will be regenerated on Clear/Start (see OnStartPressed) so each race can differ.
-        raceSessionSeed = Environment.TickCount;
-        nextRankingUpdateTime = 0f;
+        // Wire up buttons
+        if (startButton != null) startButton.onClick.AddListener(OnStartPressed);
+        if (pauseButton != null) pauseButton.onClick.AddListener(OnPausePressed);
+        if (continueButton != null) continueButton.onClick.AddListener(OnContinuePressed);
+        if (clearButton != null) clearButton.onClick.AddListener(OnClearPressed);
+        if (backButton != null) backButton.onClick.AddListener(OnBackPressed);
 
-        totalRaceTime = (RaceConfig.Instance != null) ? RaceConfig.Instance.durationSeconds : 15;
-        remainingTime = totalRaceTime;
-        UpdateCountdownText();
-
-        startButton.onClick.AddListener(OnStartPressed);
-        pauseButton.onClick.AddListener(OnPausePressed);
-        continueButton.onClick.AddListener(OnContinuePressed);
-        clearButton.onClick.AddListener(OnClearPressed);
-        backButton.onClick.AddListener(OnBackPressed);
-
-        CacheFinishRects();
-        ResetFinishToSnapshotStart();
-
-        Time.timeScale = 1f;
-
-        mainCam = Camera.main;
-
-        StartCoroutine(LoadAndSpawnRoutine());
-    }
-
-    private void CacheFinishRects()
-    {
-        if (finishRect == null && finishTransform != null)
-            finishRect = finishTransform.GetComponent<RectTransform>();
-
-        if (finishTargetRect == null && finishTargetTransform != null)
-            finishTargetRect = finishTargetTransform.GetComponent<RectTransform>();
-    }
-
-    private IEnumerator LoadAndSpawnRoutine()
-    {
-        state = State.Loading;
-        if (loadingPanel != null) loadingPanel.SetActive(true);
-
-        PauseBackgrounds();
-
-        float t0 = Time.realtimeSinceStartup;
-
-        if (!hasSpawned)
+        // Load config from RaceConfig singleton if available
+        if (RaceConfig.Instance != null)
         {
-            hasSpawned = true;
-            if (staggerSpawn)
-                yield return StartCoroutine(SpawnDucksStaggered());
-            else
-                SpawnDucks();
+            raceDuration = RaceConfig.Instance.durationSeconds;
+            duckCount = Mathf.Max(3, RaceConfig.Instance.duckCount);
         }
 
-        float elapsed = Time.realtimeSinceStartup - t0;
-        float wait = minLoadingTime - elapsed;
-        if (wait > 0f) yield return new WaitForSecondsRealtime(wait);
-
-        if (loadingPanel != null) loadingPanel.SetActive(false);
-        state = State.Ready;
-
-        // Mark this session as fresh: Start should be allowed to initialize the race.
-        freshStart = true;
-
-        // reset selection state
-        selectionDone = false;
-        chosenDuck = null;
-    }
-
-    private IEnumerator SpawnDucksStaggered()
-    {
-        duckMovers.Clear();
-        initialPositions.Clear();
-        initialRotations.Clear();
-
-        if (RaceConfig.Instance == null)
-        {
-            Debug.LogWarning("RaceConfig.Instance is null - cannot spawn ducks");
-            yield break;
-        }
-
-        if (RaceConfig.Instance.duckPrefab == null)
-        {
-            Debug.LogWarning("duckPrefab not assigned in RaceConfig - cannot spawn ducks");
-            yield break;
-        }
-
-        // If user provided non-empty names, spawn only those named ducks (ignore duckCount).
-        string[] rcNames = RaceConfig.Instance.duckNames;
-        List<string> filteredNames = new List<string>();
-        if (rcNames != null)
-        {
-            foreach (var n in rcNames)
-            {
-                if (!string.IsNullOrWhiteSpace(n))
-                    filteredNames.Add(n);
-            }
-        }
-
-        var pref = RaceConfig.Instance.namePreference;
-        bool hasNames = filteredNames.Count > 0;
-        bool useNames;
-        if (pref == RaceConfig.NameSourcePreference.PreferNumbers)
-            useNames = false;
-        else if (pref == RaceConfig.NameSourcePreference.PreferNames)
-            useNames = hasNames;
-        else
-            useNames = hasNames;
-
-        int count = useNames ? filteredNames.Count : Mathf.Max(1, RaceConfig.Instance.duckCount);
-
-        if (duckParent == null)
-        {
-            var goParent = new GameObject("Ducks");
-            duckParent = goParent.transform;
-        }
-
-        for (int i = duckParent.childCount - 1; i >= 0; i--)
-        {
-            DestroyImmediate(duckParent.GetChild(i).gameObject);
-        }
-
-        if (spawnArea == null)
-        {
-            Debug.LogWarning("spawnArea not assigned");
-            yield break;
-        }
-
-        List<Sprite> skinPool = new List<Sprite>();
-        if (RaceConfig.Instance.duckSkins != null) skinPool.AddRange(RaceConfig.Instance.duckSkins);
-
-        bool uniqueSkins = (count <= 10) && (skinPool.Count >= count);
-        List<int> usedSkinIndices = new List<int>();
-
-        float height = spawnArea.rect.height;
-
-        float interval = Mathf.Max(0f, staggerSpawnInterval);
-
-        for (int i = 0; i < count; i++)
-        {
-            float t = (i + 1f) / (count + 1f);
-            float localY = Mathf.Lerp(-height / 2f, height / 2f, t);
-            Vector3 localPos = new Vector3(0f, localY, 0f);
-            Vector3 worldPos = spawnArea.TransformPoint(localPos);
-
-            GameObject go = Instantiate(RaceConfig.Instance.duckPrefab, worldPos, Quaternion.identity, duckParent);
-
-            var img = go.GetComponentInChildren<UnityEngine.UI.Image>();
-            if (img != null && skinPool.Count > 0)
-            {
-                int idx;
-                if (uniqueSkins)
-                {
-                    List<int> choices = new List<int>();
-                    for (int k = 0; k < skinPool.Count; k++) if (!usedSkinIndices.Contains(k)) choices.Add(k);
-                    idx = choices[UnityEngine.Random.Range(0, choices.Count)];
-                    usedSkinIndices.Add(idx);
-                }
-                else
-                {
-                    idx = UnityEngine.Random.Range(0, skinPool.Count);
-                }
-                img.sprite = skinPool[idx];
-            }
-
-            var label = go.GetComponentInChildren<TextMeshProUGUI>();
-            if (label != null)
-            {
-                label.text = useNames ? filteredNames[i] : (i + 1).ToString();
-            }
-
-            var canv = go.GetComponentInChildren<Canvas>();
-            if (canv != null) canv.sortingOrder = count - i;
-            else
-            {
-                Vector3 pz = go.transform.position;
-                pz.z = -i * 0.01f;
-                go.transform.position = pz;
-            }
-
-            var mover = go.GetComponent<DuckMover>();
-            if (mover != null)
-            {
-                mover.Initialize(this);
-                duckMovers.Add(mover);
-            }
-            else
-            {
-                duckMovers.Add(null);
-            }
-
-            initialPositions.Add(go.transform.position);
-            initialRotations.Add(go.transform.rotation);
-
-            if (interval > 0f)
-                yield return new WaitForSecondsRealtime(interval);
-            else
-                yield return null; // at least spread over frames
-        }
+        StartCoroutine(InitializeRace());
     }
 
     private void Update()
     {
-        if (state != State.Running) return;
+        if (state != GameState.Running) return;
 
-        CacheFinishRects();
+        // Update timer
+        CurrentTime -= Time.deltaTime;
+        if (CurrentTime < 0f) CurrentTime = 0f;
 
-        // Update live ranking on a fixed interval (cheaper than every frame).
-        UpdateRunningRankingThrottled();
+        // Determine phase
+        CurrentPhase = DeterminePhase();
 
-        // Batch duck update (optional)
-        if (useBatchDuckUpdate)
+        // Move Finish (vạch đích) nếu bật auto-move
+        UpdateFinishMovement(Time.deltaTime);
+
+        // Update all ducks
+        for (int i = 0; i < ducks.Count; i++)
         {
-            BatchUpdateDucks(Time.deltaTime, Time.time);
+            ducks[i].Tick(CurrentPhase, Time.deltaTime, CurrentTime);
         }
 
-        // When time drops to or below stopDuckTimeD, snapshot ducks and start finish movement.
-        if (!finishMoveStarted && remainingTime <= stopDuckTimeD)
+        // Update UI
+        UpdateCountdownUI();
+
+        // Check finish
+        if (CurrentTime <= 0f)
         {
-            frozenDuckMaxX_UI = GetMaxDuckX_UI();
-            finishStartX = finishRect != null ? finishRect.anchoredPosition.x : 0f;
-            finishMoveStarted = true;
-            finishReachedTarget = false;
-            leaderSprintStarted = false;
-
-            // Determine final target X:
-            float targetFromAssigned = float.NaN;
-            if (finishTargetRect != null)
-                targetFromAssigned = finishTargetRect.anchoredPosition.x;
-
-            // If a target is provided, try to move to it within the available time (remainingTime).
-            if (!float.IsNaN(targetFromAssigned))
-            {
-                // final target must not pass the frozen duck maximum (so we don't move beyond a duck)
-                finishFinalTargetX = Mathf.Max(targetFromAssigned, frozenDuckMaxX_UI);
-
-                float distance = Mathf.Abs(finishStartX - finishFinalTargetX);
-                float availableTime = Mathf.Max(0.0001f, remainingTime); // avoid div by zero
-
-                finishAutoSpeed = distance / availableTime;
-                useAutoFinishSpeed = finishAutoSpeed > 0f;
-            }
-            else
-            {
-                // no assigned target -> move until frozenDuckMaxX_UI using fixed finishSpeedF
-                finishFinalTargetX = frozenDuckMaxX_UI;
-                useAutoFinishSpeed = false;
-                finishAutoSpeed = 0f;
-            }
-
-            Debug.Log(
-                $"time={remainingTime:F4} | finishX={(finishRect!=null?finishRect.anchoredPosition.x:0f):F2} | duckMaxX={frozenDuckMaxX_UI:F2} | finalTargetX={finishFinalTargetX:F2} | autoSpeed={finishAutoSpeed:F2}"
-            );
-        }
-
-        // If movement started, move finish by calculated speed each frame until it reaches finishFinalTargetX
-        if (finishMoveStarted && !finishReachedTarget && finishRect != null)
-        {
-            float speed = useAutoFinishSpeed ? finishAutoSpeed : Mathf.Max(0f, finishSpeedF);
-            float delta = speed * Time.deltaTime;
-
-            Vector2 p = finishRect.anchoredPosition;
-            float newX = Mathf.MoveTowards(p.x, finishFinalTargetX, delta);
-            p.x = newX;
-
-            if (Mathf.Approximately(newX, finishFinalTargetX))
-            {
-                finishReachedTarget = true;
-            }
-
-            finishRect.anchoredPosition = p;
-        }
-
-        // Leader sprint timing: start once after finishMoveStarted, but when remainingTime <= leader's effective D.
-        if (finishMoveStarted && !leaderSprintStarted)
-        {
-            DuckMover leaderByRank = GetLeader();
-            if (leaderByRank != null)
-            {
-                float leaderEffectiveD = leaderByRank.GetEffectiveStopDuckTimeD(stopDuckTimeD);
-
-                // Selection moment: 0.5s before the leader's effective D
-                if (!selectionDone && remainingTime <= leaderEffectiveD + 0.5f)
-                {
-                    PerformSelection();
-                }
-
-                if (remainingTime <= leaderEffectiveD)
-                {
-                    // Try sequence:
-                    // 1) chosenDuck (if any)
-                    // 2) current leaderByRank
-                    // 3) nearest non-finished duck (fallback)
-                    bool started = false;
-                    DuckMover starter = null;
-
-                    if (chosenDuck != null && !chosenDuck.IsSprinting())
-                    {
-                        started = TryStartLeaderSprint(chosenDuck);
-                        if (!started)
-                        {
-                            Debug.Log("chosenDuck error: will try leader");
-                        }
-                        else
-                        {
-                            starter = chosenDuck;
-                        }
-                    }
-
-                    if (!started)
-                    {
-                        started = TryStartLeaderSprint(leaderByRank);
-                        if (started)
-                        {
-                            Debug.Log("leaderByRank chosen");
-                            starter = leaderByRank;
-                        }
-                        else
-                        {
-                            Debug.Log("leaderByRank failed");
-                        }
-                    }
-
-                    if (!started)
-                    {
-                        // fallback: nearest (max worldX) non-finished, non-sprinting duck
-                        DuckMover nearest = null;
-                        float bestX = float.NegativeInfinity;
-                        foreach (var d in duckMovers)
-                        {
-                            if (d == null) continue;
-                            if (d.GetTimeReachedFinish() >= 0f) continue;
-                            if (d.IsSprinting()) continue;
-                            float wx = d.GetWorldX();
-                            if (wx > bestX)
-                            {
-                                bestX = wx;
-                                nearest = d;
-                            }
-                        }
-
-                        if (nearest != null)
-                        {
-                            started = TryStartLeaderSprint(nearest);
-                            if (started)
-                            {
-                                chosenDuck = nearest; // adopt for consistency
-                                Debug.Log("fallback: nearest chosen");
-                                starter = nearest;
-                            }
-                            else
-                            {
-                                Debug.Log("fallback failed");
-                                leaderSprintFailAttempts++;
-                            }
-                        }
-                        else
-                        {
-                            Debug.Log("no fallback candidate");
-                            leaderSprintFailAttempts++;
-                        }
-                    }
-
-                    if (started)
-                    {
-                        leaderSprintStarted = true; // only mark when sprint actually began
-                        if (starter != null)
-                            Debug.Log("Leader sprint started");
-                    }
-                    else
-                    {
-                        Debug.Log("Leader sprint: no valid starter found; will retry");
-                        // increment fail counter so we can apply a late fallback
-                        leaderSprintFailAttempts++;
-                    }
-                }
-            }
-        }
-
-        // Notify non-chosen ducks approaching their movement bounds to decelerate smoothly
-        if (finishMoveStarted && !finishReachedTarget)
-        {
-            NotifyDucksApproachingBound();
-        }
-
-        remainingTime -= Time.deltaTime;
-        if (remainingTime <= 0f)
-        {
-            remainingTime = 0f;
-
-            // ensure finish is exactly at the chosen final target when time is up
-            if (finishRect != null && finishMoveStarted)
-            {
-                Vector2 p = finishRect.anchoredPosition;
-                p.x = finishFinalTargetX;
-                finishRect.anchoredPosition = p;
-            }
-
-            OnTimeUp();
-        }
-
-        UpdateCountdownText();
-    }
-
-    private void BatchUpdateDucks(float dt, float now)
-    {
-        if (duckMovers == null || duckMovers.Count == 0) return;
-
-        Vector3 camPos = mainCam != null ? mainCam.transform.position : Vector3.zero;
-        float fullSq = duckLodFullDistance * duckLodFullDistance;
-        float medSq = duckLodMediumDistance * duckLodMediumDistance;
-
-        for (int i = 0; i < duckMovers.Count; i++)
-        {
-            var d = duckMovers[i];
-            if (d == null) continue;
-
-            // disable individual Update to avoid double processing
-            if (d.enabled) d.enabled = false;
-
-            if (mainCam == null)
-            {
-                d.Tick(dt, now);
-                continue;
-            }
-
-            float dsq = (d.transform.position - camPos).sqrMagnitude;
-            if (dsq <= fullSq)
-            {
-                d.Tick(dt, now);
-            }
-            else if (dsq <= medSq)
-            {
-                d.TickSimplified(dt, now);
-            }
-            else
-            {
-                d.TickMinimal(dt);
-            }
+            FinishRace();
         }
     }
 
-    private void UpdateRunningRankingThrottled()
+    #endregion
+
+    #region Initialization
+
+    private IEnumerator InitializeRace()
     {
-        if (rankingUpdateInterval <= 0f)
+        state = GameState.Loading;
+
+        // Save finish initial position on first init
+        if (!finishInitialPositionSaved && finishAnchor != null)
         {
-            UpdateRunningRankingNow();
+            finishInitialAnchoredPosition = finishAnchor.anchoredPosition;
+            finishInitialPositionSaved = true;
+        }
+
+        // Calculate L
+        CalculateL();
+
+        // Create seed
+        RaceSeed = Environment.TickCount;
+        rng = new System.Random(RaceSeed);
+
+        // Calculate phase timing (fixed 40/60 split)
+        CalculatePhaseTiming();
+
+        // Spawn ducks
+        yield return StartCoroutine(SpawnDucks());
+
+        // Assign outcome (winner + final P values)
+        AssignOutcome();
+
+        // Initialize timer
+        CurrentTime = raceDuration;
+        CurrentPhase = RacePhase.Opening;
+
+        state = GameState.Ready;
+
+        UpdateCountdownUI();
+    }
+
+    private void CalculateL()
+    {
+        if (spawnArea == null || endPoint == null)
+        {
+            Debug.LogError("RaceController: spawnArea hoặc endPoint chưa được gán!");
+            L = 100f; // fallback
             return;
         }
 
-        if (Time.time < nextRankingUpdateTime) return;
+        // Độ dài đường đua dùng cho Progress P:
+        // L = khoảng cách anchored X từ SpawnArea tới EndPoint.
+        L = endPoint.anchoredPosition.x - spawnArea.anchoredPosition.x;
+        Debug.Log($"RaceController: L = {L:F2} (anchored units từ SpawnArea tới EndPoint)");
 
-        nextRankingUpdateTime = Time.time + rankingUpdateInterval;
-        UpdateRunningRankingNow();
+        // Thiết lập lịch di chuyển cho Finish (nếu được bật)
+        SetupFinishMovement();
     }
 
-    private void UpdateRunningRankingNow()
+    private IEnumerator SpawnDucks()
     {
-        runningRanking.Clear();
-        foreach (var d in duckMovers)
+        // Clear existing ducks from spawnArea
+        ducks.Clear();
+        if (spawnArea != null)
         {
-            if (d != null) runningRanking.Add(d);
-        }
-
-        // Rank by world X descending (leader = max X)
-        runningRanking.Sort((a, b) => b.GetWorldX().CompareTo(a.GetWorldX()));
-
-        runningRankByDuck.Clear();
-        for (int i = 0; i < runningRanking.Count; i++)
-        {
-            // 1-based rank for readability
-            runningRankByDuck[runningRanking[i]] = i + 1;
-        }
-    }
-
-    /// <summary>
-    /// Returns 1-based rank while running (1 = leader). Returns int.MaxValue if unknown.
-    /// </summary>
-    public int GetRankOf(DuckMover duck)
-    {
-        if (duck == null) return int.MaxValue;
-        int r;
-        if (runningRankByDuck.TryGetValue(duck, out r)) return r;
-        return int.MaxValue;
-    }
-
-    public DuckMover GetLeader()
-    {
-        return runningRanking.Count > 0 ? runningRanking[0] : null;
-    }
-
-    public int GetRunnerCount()
-    {
-        return runningRanking.Count;
-    }
-
-    private float GetMaxDuckX_UI()
-    {
-        // Returns max duck X in the same anchored UI space as finishRect.
-        // - If duck is UI (has RectTransform): use anchoredPosition.x.
-        // - Else duck is world: convert to finishRect parent local X.
-        if (duckMovers == null || duckMovers.Count == 0) return 0f;
-
-        CacheFinishRects();
-        RectTransform finishParent = finishRect != null ? finishRect.parent as RectTransform : null;
-
-        float maxX = float.NegativeInfinity;
-        bool any = false;
-
-        foreach (var d in duckMovers)
-        {
-            if (d == null) continue;
-            var duckRt = d.GetComponent<RectTransform>();
-            float x;
-
-            if (duckRt != null)
+            for (int i = spawnArea.childCount - 1; i >= 0; i--)
             {
-                x = duckRt.anchoredPosition.x;
-            }
-            else
-            {
-                if (finishParent == null) continue;
-                x = finishParent.InverseTransformPoint(d.transform.position).x;
-            }
-
-            any = true;
-            if (x > maxX) maxX = x;
-        }
-
-        return any ? maxX : 0f;
-    }
-
-    // --- Background helpers ---
-    private void PauseBackgrounds()
-    {
-        var scs = FindObjectsOfType<Scroller>();
-        foreach (var s in scs) s.Pause();
-    }
-
-    private void ResumeBackgrounds()
-    {
-        var scs = FindObjectsOfType<Scroller>();
-        foreach (var s in scs) s.Resume();
-    }
-
-    private void ResetFinishToSnapshotStart()
-    {
-        CacheFinishRects();
-        if (finishRect == null) return;
-        finishStartX = finishRect.anchoredPosition.x;
-    }
-
-    private void ResetFinishToStartX()
-    {
-        CacheFinishRects();
-        if (finishRect == null) return;
-        Vector2 p = finishRect.anchoredPosition;
-        p.x = finishStartX;
-        finishRect.anchoredPosition = p;
-    }
-
-    // --- Spawning ---
-    private void SpawnDucksOnce()
-    {
-        // kept for compatibility; spawning now happens in LoadAndSpawnRoutine
-        if (hasSpawned) return;
-        hasSpawned = true;
-        SpawnDucks();
-    }
-
-    private void SpawnDucks()
-    {
-        duckMovers.Clear();
-        initialPositions.Clear();
-        initialRotations.Clear();
-
-        if (RaceConfig.Instance == null)
-        {
-            Debug.LogWarning("RaceConfig.Instance is null - cannot spawn ducks");
-            return;
-        }
-
-        if (RaceConfig.Instance.duckPrefab == null)
-        {
-            Debug.LogWarning("duckPrefab not assigned in RaceConfig - cannot spawn ducks");
-            return;
-        }
-
-        // If user provided non-empty names, spawn only those named ducks (ignore duckCount).
-        string[] rcNames = RaceConfig.Instance.duckNames;
-        List<string> filteredNames = new List<string>();
-        if (rcNames != null)
-        {
-            foreach (var n in rcNames)
-            {
-                if (!string.IsNullOrWhiteSpace(n))
-                    filteredNames.Add(n);
+                DestroyImmediate(spawnArea.GetChild(i).gameObject);
             }
         }
 
-        // Decide whether to use names based on preference and availability
-        var pref = RaceConfig.Instance.namePreference;
-        bool hasNames = filteredNames.Count > 0;
-        bool useNames;
-        if (pref == RaceConfig.NameSourcePreference.PreferNumbers)
-            useNames = false;
-        else if (pref == RaceConfig.NameSourcePreference.PreferNames)
-            useNames = hasNames;
-        else // Auto
-            useNames = hasNames;
-
-        int count = useNames ? filteredNames.Count : Mathf.Max(1, RaceConfig.Instance.duckCount);
-
-        if (duckParent == null)
+        if (duckPrefab == null)
         {
-            var go = new GameObject("Ducks");
-            duckParent = go.transform;
+            // Try from RaceConfig
+            if (RaceConfig.Instance != null && RaceConfig.Instance.duckPrefab != null)
+                duckPrefab = RaceConfig.Instance.duckPrefab;
         }
 
-        for (int i = duckParent.childCount - 1; i >= 0; i--)
+        if (duckPrefab == null)
         {
-            DestroyImmediate(duckParent.GetChild(i).gameObject);
+            Debug.LogError("RaceController: duckPrefab not assigned!");
+            yield break;
         }
 
         if (spawnArea == null)
         {
-            Debug.LogWarning("spawnArea not assigned");
-            return;
+            Debug.LogError("RaceController: spawnArea not assigned!");
+            yield break;
         }
 
-        List<Sprite> skinPool = new List<Sprite>();
-        if (RaceConfig.Instance.duckSkins != null) skinPool.AddRange(RaceConfig.Instance.duckSkins);
+        // Get SpawnArea dimensions from RectTransform
+        float frameWidth = spawnArea.rect.width;
+        float frameHeight = spawnArea.rect.height;
+        int n = duckCount;
+        
+        Debug.Log($"RaceController: SpawnArea size = {frameWidth} x {frameHeight}, ducks = {n}");
 
-        bool uniqueSkins = (count <= 10) && (skinPool.Count >= count);
-        List<int> usedSkinIndices = new List<int>();
+        // Get skins
+        Sprite[] skins = null;
+        if (RaceConfig.Instance != null && RaceConfig.Instance.duckSkins != null)
+            skins = RaceConfig.Instance.duckSkins;
 
-        float height = spawnArea.rect.height;
+        // Get names
+        string[] names = null;
+        if (RaceConfig.Instance != null && RaceConfig.Instance.duckNames != null)
+            names = RaceConfig.Instance.duckNames;
 
-        for (int i = 0; i < count; i++)
+        // SPAWN ASCENDING: k=1 to n ensures ducks[i].DuckId == i
+        // Z-ORDER: Use SetAsFirstSibling() so earlier spawned ducks (higher Y, top lanes) 
+        // are pushed behind later spawned ducks (lower Y, bottom lanes)
+        for (int k = 1; k <= n; k++)
         {
-            float t = (i + 1f) / (count + 1f);
-            float localY = Mathf.Lerp(-height / 2f, height / 2f, t);
-            Vector3 localPos = new Vector3(0f, localY, 0f);
-            Vector3 worldPos = spawnArea.TransformPoint(localPos);
+            int duckId = k - 1; // 0-indexed duck ID (nội bộ): ducks[0]=DuckId 0, ducks[1]=DuckId 1, etc.
 
-            GameObject go = Instantiate(RaceConfig.Instance.duckPrefab, worldPos, Quaternion.identity, duckParent);
+            // Calculate spawn position using diagonal formula:
+            // x = (Width * k) / (n + 1)
+            // y = (Height * k) / (n + 1)
+            float localX = (frameWidth * k) / (n + 1f);
+            float localY = (frameHeight * k) / (n + 1f);
 
-            var img = go.GetComponentInChildren<UnityEngine.UI.Image>();
-            if (img != null && skinPool.Count > 0)
+            // Instantiate as child of spawnArea (RectTransform)
+            GameObject go = Instantiate(duckPrefab, spawnArea);
+            // Đặt tên hiển thị 1-based: Duck_1, Duck_2, ...
+            go.name = $"Duck_{duckId + 1}";
+            
+            // Z-ORDER: Push earlier spawned (top lanes) behind later spawned (bottom lanes)
+            go.transform.SetAsFirstSibling();
+            
+            // Set anchored position within spawnArea
+            RectTransform duckRect = go.GetComponent<RectTransform>();
+            if (duckRect != null)
             {
-                int idx;
-                if (uniqueSkins)
-                {
-                    List<int> choices = new List<int>();
-                    for (int k = 0; k < skinPool.Count; k++) if (!usedSkinIndices.Contains(k)) choices.Add(k);
-                    idx = choices[UnityEngine.Random.Range(0, choices.Count)];
-                    usedSkinIndices.Add(idx);
-                }
-                else
-                {
-                    idx = UnityEngine.Random.Range(0, skinPool.Count);
-                }
-                img.sprite = skinPool[idx];
+                // Position relative to spawnArea's lower-left corner
+                duckRect.anchoredPosition = new Vector2(localX, localY);
+            }
+            else
+            {
+                // Fallback for non-UI prefab
+                go.transform.localPosition = new Vector3(localX, localY, 0f);
             }
 
+            // Assign skin
+            if (skins != null && skins.Length > 0)
+            {
+                var img = go.GetComponentInChildren<Image>();
+                if (img != null)
+                {
+                    int skinIdx = duckId % skins.Length;
+                    img.sprite = skins[skinIdx];
+                }
+            }
+
+            // Assign name label
             var label = go.GetComponentInChildren<TextMeshProUGUI>();
             if (label != null)
             {
-                if (useNames)
-                {
-                    // Use the filtered list of non-empty names
-                    label.text = filteredNames[i];
-                }
+                if (names != null && duckId < names.Length && !string.IsNullOrWhiteSpace(names[duckId]))
+                    label.text = names[duckId];
                 else
+                    label.text = (duckId + 1).ToString();
+            }
+
+            // Get or add DuckBrain
+            DuckBrain brain = go.GetComponent<DuckBrain>();
+            if (brain == null) brain = go.AddComponent<DuckBrain>();
+
+            // Initialize brain with spawn data (no personality needed)
+            float startX = localX; // relative to spawnArea
+            float startY = localY;
+            brain.Initialize(this, duckId, startX, startY, rng);
+
+            ducks.Add(brain);
+
+            // Stagger spawn for visual feedback
+            yield return null;
+        }
+
+        Debug.Log($"RaceController: Spawned {ducks.Count} ducks");
+    }
+    
+    /// <summary>
+    /// Assign winner and final P values for all ducks (outcome-driven)
+    /// </summary>
+    private void AssignOutcome()
+    {
+        if (ducks.Count == 0) return;
+
+        // Pick winner randomly
+        WinnerDuckId = rng.Next(0, ducks.Count);
+
+        // Assign FinalP values theo "độ hoàn thành" (0..100):
+        // - Winner luôn đạt 100%: đi đúng tới EndPoint.
+        // - Các vịt còn lại nhận giá trị trong khoảng [~20%, ~95%] để có con về gần đích, có con tụt hậu.
+
+        List<int> otherIds = new List<int>();
+        for (int i = 0; i < ducks.Count; i++)
+        {
+            if (i != WinnerDuckId) otherIds.Add(i);
+        }
+
+        // Shuffle others for random ranking
+        ShuffleList(otherIds, rng);
+
+        // Winner = 100% tiến độ (đi tới EndPoint)
+        ducks[WinnerDuckId].SetFinalP(100f);
+
+        int otherCount = otherIds.Count;
+        if (otherCount > 0)
+        {
+            // Three-band distribution to avoid clustered finishes when duckCount is high
+            float[] bandRatios = { 0.50f, 0.30f, 0.20f }; // low / mid / high
+            float[] bandMins = { -50f, 0f, 50f };
+            float[] bandMaxs = { 0f, 50f, 80f };
+
+            int bandLength = bandRatios.Length;
+            int[] bandCounts = new int[bandLength];
+            float[] desiredCounts = new float[bandLength];
+            int allocated = 0;
+
+            for (int i = 0; i < bandLength; i++)
+            {
+                float desired = bandRatios[i] * otherCount;
+                desiredCounts[i] = desired;
+                bandCounts[i] = Mathf.FloorToInt(desired);
+                allocated += bandCounts[i];
+            }
+
+            int remainder = otherCount - allocated;
+            while (remainder > 0)
+            {
+                int bestIndex = 0;
+                float bestFraction = float.MinValue;
+                for (int i = 0; i < bandLength; i++)
                 {
-                    // Use numeric labels
-                    label.text = (i + 1).ToString();
+                    float fraction = desiredCounts[i] - bandCounts[i];
+                    if (fraction > bestFraction)
+                    {
+                        bestFraction = fraction;
+                        bestIndex = i;
+                    }
+                }
+
+                bandCounts[bestIndex]++;
+                remainder--;
+            }
+
+            List<float> pooledPValues = new List<float>(otherCount);
+            for (int band = 0; band < bandLength; band++)
+            {
+                float min = bandMins[band];
+                float max = bandMaxs[band];
+                for (int count = 0; count < bandCounts[band]; count++)
+                {
+                    float roll = min + (float)rng.NextDouble() * (max - min);
+                    pooledPValues.Add(roll);
                 }
             }
 
-            var canv = go.GetComponentInChildren<Canvas>();
-            if (canv != null) canv.sortingOrder = count - i;
-            else
-            {
-                Vector3 pz = go.transform.position;
-                pz.z = -i * 0.01f;
-                go.transform.position = pz;
-            }
+            ShuffleList(pooledPValues, rng);
 
-            var mover = go.GetComponent<DuckMover>();
-            if (mover != null)
+            for (int i = 0; i < otherIds.Count; i++)
             {
-                mover.Initialize(this);
-                duckMovers.Add(mover);
+                int duckId = otherIds[i];
+                float finalP = Mathf.Clamp(pooledPValues[i], -50f, 80f);
+                ducks[duckId].SetFinalP(finalP);
             }
-            else
-            {
-                duckMovers.Add(null);
-            }
+        }
 
-            initialPositions.Add(go.transform.position);
-            initialRotations.Add(go.transform.rotation);
+        // Build final rankings
+        finalRankings.Clear();
+        List<(int id, float p)> sorted = new List<(int, float)>();
+        for (int i = 0; i < ducks.Count; i++)
+        {
+            sorted.Add((i, ducks[i].FinalP));
+        }
+        sorted.Sort((a, b) => b.p.CompareTo(a.p)); // descending
+        foreach (var item in sorted)
+            finalRankings.Add(item.id);
+
+        // Log dùng chỉ số 1-based cho dễ đối chiếu với số trên thân vịt
+        string rankingsOneBased = string.Join(",", finalRankings.ConvertAll(id => id + 1));
+        Debug.Log($"RaceController: Winner = Duck {WinnerDuckId + 1}, Rankings = [{rankingsOneBased}]");
+    }
+
+    #endregion
+
+    #region Phase Logic
+
+    /// <summary>
+    /// Calculate phase durations using fixed 40/60 split:
+    /// T_12 = T - T_3
+    /// T_1 = 40% of T_12
+    /// T_2 = 60% of T_12
+    /// </summary>
+    private void CalculatePhaseTiming()
+    {
+        // T_12 = Total time minus sprint duration
+        phase12Duration = raceDuration - sprintDuration;
+        
+        // T_1 = fixed 40% of T_12
+        phase1Duration = phase12Duration * 0.4f;
+        
+        // T_2 = fixed 60% of T_12
+        phase2Duration = phase12Duration * 0.6f;
+        
+        Debug.Log($"RaceController: Phase Timing - T={raceDuration}s, T3={sprintDuration}s");
+        Debug.Log($"RaceController: T_12={phase12Duration}s, T_1={phase1Duration}s, T_2={phase2Duration}s");
+    }
+
+    /// <summary>
+    /// Get the PhaseConfig for a given phase.
+    /// Used by DuckBrain to get action frequency and speed ranges.
+    /// </summary>
+    public PhaseConfig GetPhaseConfig(RacePhase phase)
+    {
+        switch (phase)
+        {
+            case RacePhase.Opening:
+                return phase1Config;
+            case RacePhase.Midgame:
+                return phase2Config;
+            default:
+                return phase2Config; // Sprint doesn't use PhaseConfig but return something valid
         }
     }
 
-    // --- Button callbacks ---
+    private RacePhase DeterminePhase()
+    {
+        // Calculate elapsed time from start
+        float elapsed = raceDuration - CurrentTime;
+        
+        // Phase 1 (Opening): 0 to T_1
+        if (elapsed < phase1Duration)
+            return RacePhase.Opening;
+        
+        // Phase 2 (Midgame): T_1 to (T_1 + T_2)
+        if (elapsed < phase1Duration + phase2Duration)
+            return RacePhase.Midgame;
+        
+        // Phase 3 (Sprint): Last T_3 seconds
+        return RacePhase.Sprint;
+    }
+
+    #endregion
+
+    #region Public API for DuckBrain
+
+    /// <summary>
+    /// Chuyển Progress P thành anchored X (local trong SpawnArea) cho 1 con vịt.
+    ///
+    /// - startX: vị trí xuất phát (P = 0).
+    /// - L: anchored X của EndPoint tính từ SpawnArea.
+    /// - P: % hoàn thành [-20 .. 105].
+    ///
+    /// Công thức: x = startX + (P/100) * (L - startX)
+    ///   -> P = 0   => x = startX
+    ///   -> P = 100 => x = L (tức cùng X với EndPoint, bất kể startX khác nhau)
+    /// </summary>
+    public float PToAnchoredX(float startX, float p)
+    {
+        float t = p / 100f;
+        return startX + t * (L - startX);
+    }
+
+    /// <summary>
+    /// Get spawnArea RectTransform for position calculations
+    /// </summary>
+    public RectTransform GetSpawnAreaRect()
+    {
+        return spawnArea;
+    }
+
+    /// <summary>
+    /// Get current rank of a duck (1 = leader)
+    /// </summary>
+    public int GetCurrentRank(int duckId)
+    {
+        // Sort by current P descending
+        List<(int id, float p)> sorted = new List<(int, float)>();
+        for (int i = 0; i < ducks.Count; i++)
+        {
+            sorted.Add((i, ducks[i].CurrentP));
+        }
+        sorted.Sort((a, b) => b.p.CompareTo(a.p));
+
+        for (int i = 0; i < sorted.Count; i++)
+        {
+            if (sorted[i].id == duckId)
+                return i + 1; // 1-indexed rank
+        }
+        return ducks.Count;
+    }
+
+    /// <summary>
+    /// Get leader's current P
+    /// </summary>
+    public float GetLeaderP()
+    {
+        float maxP = float.MinValue;
+        for (int i = 0; i < ducks.Count; i++)
+        {
+            if (ducks[i].CurrentP > maxP)
+                maxP = ducks[i].CurrentP;
+        }
+        return maxP;
+    }
+
+    /// <summary>
+    /// Get total duck count
+    /// </summary>
+    public int GetDuckCount() => ducks.Count;
+
+    #endregion
+
+    #region Race Flow
+
     private void OnStartPressed()
     {
-        // Allow Continue button to resume when paused
-        if (state == State.Paused)
+        if (state == GameState.Ready)
+        {
+            state = GameState.Running;
+            Time.timeScale = 1f;
+            ResumeAllScrollers();
+        }
+        else if (state == GameState.Paused)
         {
             OnContinuePressed();
-            return;
         }
-
-        // Only allow starting when in Ready state and this is a fresh session (just loaded from setup or after Clear)
-        if (state != State.Ready) return;
-        if (!freshStart) return;
-
-        // New session seed each time user starts a race.
-        raceSessionSeed = unchecked(Environment.TickCount ^ (int)DateTime.UtcNow.Ticks);
-
-        runningRanking.Clear();
-        runningRankByDuck.Clear();
-        nextRankingUpdateTime = 0f;
-
-        state = State.Running;
-        ResumeBackgrounds();
-
-        Time.timeScale = 1f;
-
-        if (remainingTime <= 0f) remainingTime = totalRaceTime;
-
-        CacheFinishRects();
-        ResetFinishToSnapshotStart();
-
-        finishMoveStarted = false;
-        finishReachedTarget = false;
-        frozenDuckMaxX_UI = 0f;
-        useAutoFinishSpeed = false;
-        finishAutoSpeed = 0f;
-        finishFinalTargetX = 0f;
-        leaderSprintStarted = false;
-
-        foreach (var d in duckMovers)
-        {
-            if (d == null) continue;
-            d.StopSprint();
-            // pass computed clamp X values (world-space)
-            d.ApplyRaceParams(speedMinA, speedMaxB, randomIntervalC, stopDuckTimeD, MinPosX, MaxPosX);
-        }
-
-        // After the first valid Start in a fresh session, mark as not fresh anymore so subsequent Start presses
-        // won't re-initialize or otherwise affect spawn/skins.
-        freshStart = false;
     }
 
     private void OnPausePressed()
     {
-        if (state != State.Running) return;
-        state = State.Paused;
-        PauseBackgrounds();
-
-        previousTimeScale = Time.timeScale;
+        if (state != GameState.Running) return;
+        state = GameState.Paused;
         Time.timeScale = 0f;
+        PauseAllScrollers();
     }
 
     private void OnContinuePressed()
     {
-        if (state != State.Paused) return;
-        state = State.Running;
-        ResumeBackgrounds();
-
-        Time.timeScale = previousTimeScale <= 0f ? 1f : previousTimeScale;
+        if (state != GameState.Paused) return;
+        state = GameState.Running;
+        Time.timeScale = 1f;
+        ResumeAllScrollers();
     }
 
     private void OnClearPressed()
     {
-        totalRaceTime = (RaceConfig.Instance != null) ? RaceConfig.Instance.durationSeconds : 15;
-        remainingTime = totalRaceTime;
-        UpdateCountdownText();
-
-        state = State.Ready;
-        PauseBackgrounds();
-
         Time.timeScale = 1f;
+        PauseAllScrollers();
+        ResetAllScrollers();
 
-        finishMoveStarted = false;
-        finishReachedTarget = false;
-        frozenDuckMaxX_UI = 0f;
+        // Reset finish line to initial position
+        ResetFinishLine();
 
-        runningRanking.Clear();
-        runningRankByDuck.Clear();
-        nextRankingUpdateTime = 0f;
+        StartCoroutine(InitializeRace());
+    }
 
-        finalRankingList = null;
-        leaderSprintStarted = false;
-
-        for (int i = 0; i < duckMovers.Count; i++)
+    /// <summary>
+    /// Reset finish line (vạch đích) back to its initial position.
+    /// </summary>
+    private void ResetFinishLine()
+    {
+        if (finishAnchor != null && finishInitialPositionSaved)
         {
-            var d = duckMovers[i];
-            if (d == null) continue;
-            if (i < initialPositions.Count)
-            {
-                d.ResetToInitial(initialPositions[i], initialRotations[i]);
-            }
-            d.StopSprint();
+            finishAnchor.anchoredPosition = finishInitialAnchoredPosition;
+            finishMoving = false;
         }
-
-        ResetFinishToStartX();
-
-        // Reset backgrounds and scrollers
-        var spawners = FindObjectsOfType<BackgroundSpawner>();
-        foreach (var sp in spawners) sp.ResetSpawner();
-
-        var scrollers = FindObjectsOfType<Scroller>();
-        foreach (var sc in scrollers) sc.ResetToStart();
-
-        // After a Clear, allow Start to initialize the race again.
-        freshStart = true;
-
-        // reset selection state
-        selectionDone = false;
-        chosenDuck = null;
     }
 
     private void OnBackPressed()
     {
+        Time.timeScale = 1f;
         UnityEngine.SceneManagement.SceneManager.LoadScene("SetupScene");
     }
 
-    private void OnTimeUp()
+    private void FinishRace()
     {
-        state = State.Ready;
-        PauseBackgrounds();
+        state = GameState.Finished;
 
-        Time.timeScale = 1f;
+        // Pause background scrollers
+        PauseAllScrollers();
 
-        finalRankingList = BuildFinalRankingList();
-
-        var lb = FindObjectOfType<LeaderboardUI>();
-        if (lb != null) lb.UpdateLeaderboard(finalRankingList);
-    }
-
-    private List<DuckMover> BuildFinalRankingList()
-    {
-        var movers = new List<DuckMover>();
-        foreach (var d in duckMovers) if (d != null) movers.Add(d);
-
-        // Sort with primary = timeReachedFinish (earlier wins), secondary = worldX, tertiary = duckIndex deterministic
-        movers.Sort((a, b) =>
+        // Snap all ducks to final P
+        for (int i = 0; i < ducks.Count; i++)
         {
-            float at = a.GetTimeReachedFinish();
-            float bt = b.GetTimeReachedFinish();
-            bool aFin = at >= 0f;
-            bool bFin = bt >= 0f;
+            ducks[i].SnapToFinal();
+        }
 
-            if (aFin && bFin)
-            {
-                if (Mathf.Abs(at - bt) > FinishTimeEpsilon) return at.CompareTo(bt); // earlier first
-                return a.GetDuckIndex().CompareTo(b.GetDuckIndex());
-            }
-            if (aFin) return -1; // finished ducks rank above non-finished
-            if (bFin) return 1;
+        // Display leaderboard
+        DisplayLeaderboard();
 
-            int cmp = b.GetWorldX().CompareTo(a.GetWorldX());
-            if (cmp != 0) return cmp;
-            return a.GetDuckIndex().CompareTo(b.GetDuckIndex());
-        });
-
-        return movers;
+        Debug.Log("Race Finished!");
     }
 
-    private void UpdateCountdownText()
+    private void DisplayLeaderboard()
     {
-        int sec = Mathf.CeilToInt(remainingTime);
-        int h = sec / 3600;
-        int m = (sec % 3600) / 60;
-        int s = sec % 60;
+        // Find LeaderboardUI if exists
+        var leaderboardUI = FindObjectOfType<LeaderboardUI>();
+        if (leaderboardUI != null)
+        {
+            // Convert ducks list to List<DuckBrain> for the leaderboard
+            leaderboardUI.UpdateLeaderboard(ducks);
+        }
+
+        // Log final rankings
+        Debug.Log($"Final Rankings: Winner = Duck {WinnerDuckId + 1}");
+        for (int i = 0; i < finalRankings.Count; i++)
+        {
+            int id = finalRankings[i];
+            var duck = ducks[id];
+            Debug.Log($"  Rank {i + 1}: Duck {id + 1} (P = {duck.FinalP:F1})");
+        }
+    }
+
+    /// <summary>
+    /// Get list of all ducks for leaderboard updates
+    /// </summary>
+    public List<DuckBrain> GetDucks() => ducks;
+
+    #endregion
+
+    #region UI
+
+    private void UpdateCountdownUI()
+    {
         if (countdownText == null) return;
-        if (h > 0) countdownText.text = string.Format("{0:D2}:{1:D2}:{2:D2}", h, m, s);
-        else countdownText.text = string.Format("{0:D2}:{1:D2}", m, s);
+
+        int totalSec = Mathf.CeilToInt(CurrentTime);
+        int min = totalSec / 60;
+        int sec = totalSec % 60;
+        countdownText.text = $"{min:D2}:{sec:D2}";
     }
 
-    public bool IsRunning()
-    {
-        return state == State.Running;
-    }
+    #endregion
 
-    // Perform selection of one duck 0.5s before sprint according to tiered probabilities.
-    private void PerformSelection()
-    {
-        selectionDone = true; // ensure we only select once
+    #region Utility
 
-        // build current ranking snapshot
-        var runners = new List<DuckMover>();
-        foreach (var d in duckMovers) if (d != null) runners.Add(d);
-        if (runners.Count < 3)
+    private static void ShuffleList<T>(List<T> list, System.Random rng)
+    {
+        int n = list.Count;
+        while (n > 1)
         {
-            // not enough ducks to perform selection per spec
-            chosenDuck = null;
-            Debug.Log("Selection skipped: less than 3 runners");
+            n--;
+            int k = rng.Next(n + 1);
+            T temp = list[k];
+            list[k] = list[n];
+            list[n] = temp;
+        }
+    }
+
+    /// <summary>
+    /// Tính toán lịch di chuyển cho Finish (vạch đích) sao cho với tốc độ finishSpeed
+    /// nó sẽ bắt đầu di chuyển ở thời điểm CurrentTime ~= finishStartTime và dừng
+    /// đúng tại EndPoint khi CurrentTime về 0.
+    /// </summary>
+    private void SetupFinishMovement()
+    {
+        finishMoving = false;
+        finishTravelTime = 0f;
+        finishStartTime = 0f;
+
+        if (!enableFinishAutoMove || finishAnchor == null || endPoint == null)
+            return;
+
+        float startX = finishAnchor.anchoredPosition.x;
+        float targetX = endPoint.anchoredPosition.x;
+        float distance = targetX - startX; // âm nếu đi từ phải sang trái
+
+        float speedAbs = Mathf.Abs(finishSpeed);
+        if (speedAbs < 0.01f || Mathf.Abs(distance) < 0.01f)
+            return;
+
+        // Thời gian cần để di chuyển từ startX -> targetX với tốc độ finishSpeed
+        finishTravelTime = Mathf.Abs(distance) / speedAbs;
+
+        // Ta muốn Finish bắt đầu di chuyển khi thời gian còn lại == thời gian cần di chuyển
+        finishStartTime = Mathf.Min(raceDuration, finishTravelTime);
+
+        Debug.Log($"RaceController: Finish travelTime={finishTravelTime:F2}s, finishStartTime={finishStartTime:F2}s, distance={distance:F1}");
+    }
+
+    /// <summary>
+    /// Cập nhật chuyển động Finish mỗi frame khi race đang chạy.
+    /// </summary>
+    private void UpdateFinishMovement(float deltaTime)
+    {
+        if (!enableFinishAutoMove || finishAnchor == null || endPoint == null)
+            return;
+
+        // Khi thời gian còn lại <= finishStartTime thì bắt đầu cho Finish di chuyển
+        if (!finishMoving && CurrentTime <= finishStartTime && CurrentTime > 0f)
+        {
+            finishMoving = true;
+        }
+
+        if (!finishMoving)
+            return;
+
+        Vector2 pos = finishAnchor.anchoredPosition;
+        float targetX = endPoint.anchoredPosition.x;
+        float remaining = targetX - pos.x;
+
+        if (Mathf.Abs(remaining) < 0.01f)
+        {
+            // Đã tới EndPoint
+            pos.x = targetX;
+            finishAnchor.anchoredPosition = pos;
+            finishMoving = false;
             return;
         }
 
-        // Exclude ducks that already reached finish
-        var candidates = new List<DuckMover>();
-        foreach (var runner in runners)
+        float dir = Mathf.Sign(remaining); // tự xác định nên đi trái hay phải
+        float step = Mathf.Abs(finishSpeed) * dir * deltaTime;
+
+        // Nếu step sẽ vượt quá target thì clamp lại đúng target
+        if (Mathf.Abs(step) >= Mathf.Abs(remaining))
         {
-            if (runner.GetTimeReachedFinish() < 0f) candidates.Add(runner);
-        }
-
-        if (candidates.Count < 3)
-        {
-            // not enough non-finished ducks to perform selection
-            chosenDuck = null;
-            Debug.Log("Selection skipped: not enough non-finished candidates");
-            return;
-        }
-
-        // sort by world X descending (leader first)
-        candidates.Sort((a, b) => b.GetWorldX().CompareTo(a.GetWorldX()));
-
-        int topN = Mathf.Min(9, candidates.Count);
-
-        // determine mode based on total runners (mốc)
-        // mốc1: 3..5 => [100]
-        // mốc2: 6..8 => [60,40]
-        // mốc3: >=9 => [50,30,20]
-
-        float[] tierProbs;
-        int modeCount = 0;
-        if (candidates.Count <= 5)
-        {
-            tierProbs = new float[] { 1.0f };
-            modeCount = 1;
-        }
-        else if (candidates.Count <= 8)
-        {
-            tierProbs = new float[] { 0.7f, 0.3f };
-            modeCount = 2;
+            pos.x = targetX;
+            finishMoving = false;
         }
         else
         {
-            tierProbs = new float[] { 0.7f, 0.2f, 0.1f };
-            modeCount = 3;
+            pos.x += step;
         }
 
-        // build tiers lists
-        var tiers = new List<List<DuckMover>>();
-        for (int i = 0; i < modeCount; i++) tiers.Add(new List<DuckMover>());
-
-        for (int i = 0; i < topN; i++)
-        {
-            int tierIndex = i / 3; // 0 -> tier1 (0..2), 1 -> tier2 (3..5), 2 -> tier3 (6..8)
-            if (tierIndex < modeCount)
-                tiers[tierIndex].Add(candidates[i]);
-        }
-
-        // If for some reason all tiers empty (shouldn't), abort
-        int totalCandidates = 0;
-        foreach (var t in tiers) totalCandidates += t.Count;
-        if (totalCandidates == 0)
-        {
-            chosenDuck = null;
-            Debug.LogWarning("Selection aborted: no candidates in tiers");
-            return;
-        }
-
-        // choose tier by probabilities
-        float r = UnityEngine.Random.value;
-        float accum = 0f;
-        int chosenTier = -1;
-        for (int i = 0; i < tierProbs.Length; i++)
-        {
-            accum += tierProbs[i];
-            if (r <= accum)
-            {
-                chosenTier = i;
-                break;
-            }
-        }
-        if (chosenTier == -1) chosenTier = tierProbs.Length - 1;
-
-        // If chosen tier has no members (edge case), fallback to first non-empty tier
-        if (tiers[chosenTier].Count == 0)
-        {
-            for (int i = 0; i < tiers.Count; i++) if (tiers[i].Count > 0) { chosenTier = i; break; }
-        }
-
-        // pick uniformly among members of chosen tier
-        var candidatesTier = tiers[chosenTier];
-        if (candidatesTier.Count == 0)
-        {
-            chosenDuck = null;
-            Debug.LogWarning("Selection found no candidates after fallback");
-            return;
-        }
-
-        int idx = UnityEngine.Random.Range(0, candidatesTier.Count);
-        chosenDuck = candidatesTier[idx];
-
-        string chosenInfo;
-        if (chosenDuck != null) chosenInfo = chosenDuck.GetWorldX().ToString();
-        else chosenInfo = "null";
+        finishAnchor.anchoredPosition = pos;
     }
 
-    // Attempt to start sprint for the specified duck. Returns true if sprint actually started.
-    private bool TryStartLeaderSprint(DuckMover leader)
+    /// <summary>
+    /// Resume all Scroller instances in scene (for background movement)
+    /// </summary>
+    private void ResumeAllScrollers()
     {
-        if (leader == null) return false;
-        if (leader.IsSprinting()) return false;
-
-        // do not start sprint for a duck that already reached finish
-        if (leader.GetTimeReachedFinish() >= 0f) return false;
-
-        CacheFinishRects();
-
-        RectTransform finishParent = finishRect != null ? finishRect.parent as RectTransform : null;
-        if (finishParent == null)
+        var scrollers = FindObjectsOfType<Scroller>();
+        foreach (var s in scrollers)
         {
-            return false;
-        }
-
-        Vector3 worldPoint = finishParent.TransformPoint(new Vector3(finishFinalTargetX, 0f, 0f));
-        float finishTargetWorldX = worldPoint.x;
-
-        // Attempt sprint
-        leader.StartSprintToWorldX(finishTargetWorldX, remainingTime);
-
-        // Consider sprint started if the duck reports sprinting after call
-        return leader.IsSprinting();
-    }
-
-    // Expose finish target in world-space for ducks to detect crossing
-    public float GetFinishWorldX()
-    {
-        CacheFinishRects();
-        RectTransform finishParent = finishRect != null ? finishRect.parent as RectTransform : null;
-        if (finishParent == null) return float.NaN;
-        Vector3 worldPoint = finishParent.TransformPoint(new Vector3(finishFinalTargetX, 0f, 0f));
-        return worldPoint.x;
-    }
-
-    // Notify ducks that are within boundApproachThreshold of their movement max (except chosenDuck)
-    private void NotifyDucksApproachingBound()
-    {
-        if (duckMovers == null || duckMovers.Count == 0) return;
-
-        for (int i = 0; i < duckMovers.Count; i++)
-        {
-            var d = duckMovers[i];
-            if (d == null) continue;
-            if (d == chosenDuck) continue;
-            if (d.IsSprinting()) continue;
-            if (d.GetTimeReachedFinish() >= 0f) continue;
-
-            float maxPos = d.GetMaxPosX();
-            float wx = d.GetWorldX();
-
-            // If already beyond maxPos (shouldn't happen) skip
-            if (wx >= maxPos) continue;
-
-            float remaining = maxPos - wx;
-            if (remaining <= boundApproachThreshold)
-            {
-                d.NotifyApproachingBound(boundDecelTime);
-            }
+            s.Resume();
         }
     }
 
-    private int leaderSprintFailAttempts = 0;
-
-    private void LateFallbackEnsureFinisher()
+    /// <summary>
+    /// Pause all Scroller instances in scene
+    /// </summary>
+    private void PauseAllScrollers()
     {
-        // If we are very near race end and no duck has been recorded as finished, force the nearest duck to be marked finished.
-        if (!finishMoveStarted) return;
-        if (leaderSprintStarted) return;
-
-        // if we've attempted many times without success or less than 0.2s remaining, force one
-        if (leaderSprintFailAttempts > 20 || remainingTime <= 0.2f)
+        var scrollers = FindObjectsOfType<Scroller>();
+        foreach (var s in scrollers)
         {
-            // find any duck that hasn't finished and mark the max-worldX one
-            DuckMover best = null;
-            float bestX = float.NegativeInfinity;
-            foreach (var d in duckMovers)
-            {
-                if (d == null) continue;
-                if (d.GetTimeReachedFinish() >= 0f) continue;
-                float wx = d.GetWorldX();
-                if (wx > bestX)
-                {
-                    bestX = wx;
-                    best = d;
-                }
-            }
-
-            if (best != null)
-            {
-                best.ForceMarkReachedFinishNow();
-                leaderSprintStarted = true; // avoid doing this repeatedly
-                Debug.LogWarning($"Late fallback: forced duckIndex={best.GetDuckIndex()} as finisher due to leader sprint failures or low remaining time.");
-            }
+            s.Pause();
         }
     }
+
+    /// <summary>
+    /// Reset all Scroller instances to starting position
+    /// </summary>
+    private void ResetAllScrollers()
+    {
+        var scrollers = FindObjectsOfType<Scroller>();
+        foreach (var s in scrollers)
+        {
+            s.ResetToStart();
+        }
+    }
+
+    #endregion
+
+    #region Public State Queries
+
+    public bool IsRunning() => state == GameState.Running;
+    public bool IsFinished() => state == GameState.Finished;
+    public GameState GetState() => state;
+
+    #endregion
 }

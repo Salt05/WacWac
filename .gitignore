@@ -1,3 +1,4 @@
+# Unity
 [Ll]ibrary/
 [Tt]emp/
 [Oo]bj/
@@ -5,7 +6,19 @@
 [Bb]uilds/
 [Ll]ogs/
 [Uu]serSettings/
+
+# IDE
 .vs/
+.idea/
+.vscode/
 *.csproj
-.vsconfig
 *.sln
+.vsconfig
+
+# OS
+.DS_Store
+
+# Misc
+*.log
+*.tmp
+*.bak

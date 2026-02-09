@@ -1,638 +1,131 @@
 ﻿using UnityEngine;
 
+/// <summary>
+/// DuckMover (legacy compatibility wrapper).
+///
+/// In the new Progress-based design, movement is fully handled by DuckBrain.
+/// DuckMover now only provides:
+/// - Accessors for world X (for LeaderboardUI, DuckSystemTester).
+/// - Simple DuckStats container (tier/personality) for logging / analysis.
+/// - Optional helpers that keep old public APIs but no longer drive motion.
+/// </summary>
 public class DuckMover : MonoBehaviour
 {
     [HideInInspector] public RaceController raceController;
 
-    // runtime params (provided by RaceController when race starts)
-    private float speedMinA;
-    private float speedMaxB;
-    private float randomIntervalC;
-    private float stopDuckTimeD;
-    private float minPosX;
-    private float maxPosX;
+    [Header("Stats (for analysis / UI only)")]
+    [SerializeField] private DuckStats stats = new DuckStats();
 
-    // behavior cycle
-    private float nextRandomTime; // (kept for backward compat; controlled by DuckBrain now)
+    /// <summary>Optional link to the new Progress-based brain component.</summary>
+    public DuckBrain brain;
 
-    // initial transform for Clear
+    // cached index in hierarchy (lane index)
+    private int duckIndex = -1;
+
+    // initial transform for ResetToInitial
     private Vector3 initialPosition;
     private Quaternion initialRotation;
 
-    // --- Sprint mode (leader only) ---
-    private bool isSprint = false;
-    private float sprintTargetWorldX = 0f;
-    private float sprintTotalTime = 0f;
-    private float sprintTimeRemaining = 0f;
-    private float sprintAccel = 0f;
-    private float sprintFinalSpeed = 0f;
-
-    // --- Allow temporary expansion of movement bounds during sprint ---
-    private bool sprintExpandedBounds = false;
-    private float savedMaxPosX = 0f;
-
-    // --- Time of arrival at finish (world X). -1 = not reached yet. ---
+    // legacy finish-time tracking (used only by analysis helpers)
     private float timeReachedFinish = -1f;
-    private const float FinishEpsilon = 0.001f;
 
-    // --- Slow-down when approaching bound ---
-    private bool isSlowingForBound = false;
-
-    // --- RNG + stats ---
-    private System.Random rng;
-    private DuckStats stats;
-    private int duckIndex = -1;
-
-    // --- Phase 2: components (C# classes) ---
-    private readonly DuckMovement movement = new DuckMovement();
-    private readonly DuckBrain brain = new DuckBrain();
-    private DuckVisualizer visualizer;
-
-    // --- LOD minimal tick throttling ---
-    private float minimalTickAccumulator;
-    private const float MinimalTickIntervalDefault = 0.2f;
-
-    public void Initialize(RaceController rc)
+    private void Awake()
     {
-        raceController = rc;
-
         initialPosition = transform.position;
         initialRotation = transform.rotation;
 
         duckIndex = transform.GetSiblingIndex();
-
-        if (stats == null)
-        {
-            stats = new DuckStats();
-            stats.duckIndex = duckIndex;
-        }
-
-        visualizer = GetComponent<DuckVisualizer>();
-        if (visualizer == null) visualizer = gameObject.AddComponent<DuckVisualizer>();
-
-        // Apply default stamina bar visibility from BalanceTuner (if any).
-        if (BalanceTuner.Instance != null && visualizer != null)
-        {
-            visualizer.showStaminaBar = BalanceTuner.Instance.defaultShowStaminaBars;
-            visualizer.SetStaminaBarVisible(visualizer.showStaminaBar);
-        }
-
-        ReseedRng();
-
-        movement.Reset();
-        nextRandomTime = Time.time;
-        enabled = true;
-
-        // reset finish time state
-        timeReachedFinish = -1f;
-        isSlowingForBound = false;
-    }
-
-    private void ReseedRng()
-    {
-        int sessionSeed = raceController != null ? raceController.raceSessionSeed : 0;
-        int seed = HashSeed(sessionSeed, duckIndex);
-
-        rng = new System.Random(seed);
-
-        RollInitialStats();
-
-        brain.Reset(rng, Time.time);
-
-        // apply tier color for debugging -- DISABLED to keep duck visuals fixed
-        // if (visualizer != null) visualizer.ApplyTierColor(stats.tier);
-    }
-
-    private static int HashSeed(int raceSessionSeed, int duckIndex)
-    {
-        unchecked
-        {
-            int h = 17;
-            h = h * 31 + raceSessionSeed;
-            h = h * 31 + duckIndex;
-            h ^= (h << 13);
-            h ^= (h >> 17);
-            h ^= (h << 5);
-            return h;
-        }
-    }
-
-    private void RollInitialStats()
-    {
-        if (stats == null) return;
-
+        if (stats == null) stats = new DuckStats();
         stats.duckIndex = duckIndex;
-        stats.stamina01 = 1f;
 
-        double t = rng != null ? rng.NextDouble() : 0.5;
-        if (t < 0.20) stats.tier = DuckStats.Tier.Slow;
-        else if (t < 0.70) stats.tier = DuckStats.Tier.Average;
-        else if (t < 0.95) stats.tier = DuckStats.Tier.Fast;
-        else stats.tier = DuckStats.Tier.VeryFast;
-
-        int p = rng != null ? rng.Next(0, 5) : 0;
-        stats.personality = (DuckStats.Personality)p;
-
-        float baseC = NextFloat(0.35f, 0.85f);
-        float tweak = 0f;
-        switch (stats.tier)
+        // assign a stable-but-simple random tier/personality for distribution tests
+        // (no gameplay effect in the new Progress-based system)
+        if (Application.isPlaying)
         {
-            case DuckStats.Tier.Slow: tweak = +0.08f; break;
-            case DuckStats.Tier.Average: tweak = +0.03f; break;
-            case DuckStats.Tier.Fast: tweak = -0.02f; break;
-            case DuckStats.Tier.VeryFast: tweak = -0.07f; break;
-        }
-        stats.consistency01 = Mathf.Clamp01(baseC + tweak);
+            float t = Random.value;
+            if (t < 0.20f) stats.tier = DuckStats.Tier.Slow;
+            else if (t < 0.70f) stats.tier = DuckStats.Tier.Average;
+            else if (t < 0.95f) stats.tier = DuckStats.Tier.Fast;
+            else stats.tier = DuckStats.Tier.VeryFast;
 
-        if (stats.personality == DuckStats.Personality.Steady) stats.consistency01 = Mathf.Clamp01(stats.consistency01 + 0.15f);
-        if (stats.personality == DuckStats.Personality.Erratic) stats.consistency01 = Mathf.Clamp01(stats.consistency01 - 0.25f);
+            int p = Random.Range(0, 4);
+            stats.personality = (DuckStats.Personality)p;
+        }
+
+        if (brain == null) brain = GetComponent<DuckBrain>();
+        if (raceController == null) raceController = FindObjectOfType<RaceController>();
     }
 
-    private float NextFloat(float minInclusive, float maxInclusive)
-    {
-        if (rng == null) return Random.Range(minInclusive, maxInclusive);
-        float t = (float)rng.NextDouble();
-        return Mathf.Lerp(minInclusive, maxInclusive, t);
-    }
-
-    public void ApplyRaceParams(float speedMinA, float speedMaxB, float randomIntervalC, float stopDuckTimeD, float minPosX, float maxPosX)
-    {
-        this.speedMinA = speedMinA;
-        this.speedMaxB = speedMaxB;
-        this.randomIntervalC = randomIntervalC;
-        this.stopDuckTimeD = stopDuckTimeD;
-        this.minPosX = minPosX;
-        this.maxPosX = maxPosX;
-
-        movement.SetBounds(minPosX, maxPosX);
-
-        // reseed per race to be deterministic per session
-        ReseedRng();
-
-        if (nextRandomTime < Time.time) nextRandomTime = Time.time;
-
-        // reset finish time
-        timeReachedFinish = -1f;
-        isSlowingForBound = false;
-    }
-
-    private void Update()
-    {
-        // Default path (when not batch-updated): keep previous behavior.
-        Tick(Time.deltaTime, Time.time);
-    }
-
-    public void Tick(float deltaTime, float now)
-    {
-        // Full update.
-        TickInternal(deltaTime, now, TickMode.Full);
-    }
-
-    public void TickSimplified(float deltaTime, float now)
-    {
-        // Medium update: no momentum/comeback.
-        TickInternal(deltaTime, now, TickMode.Simplified);
-    }
-
-    public void TickMinimal(float deltaTime)
-    {
-        float dt = deltaTime;
-        if (raceController == null) return;
-        if (!raceController.IsRunning()) return;
-
-        // Accumulate time; only do the cheap "decision" every interval.
-        minimalTickAccumulator += dt;
-
-        float interval = MinimalTickIntervalDefault;
-        var balance = BalanceTuner.Instance != null ? BalanceTuner.Instance.Settings : null;
-        // allow designers to get a bit more/less updates by piggybacking on ranking interval if desired
-        if (raceController != null && raceController.rankingUpdateInterval > 0f)
-            interval = Mathf.Clamp(raceController.rankingUpdateInterval * 2f, 0.1f, 0.5f);
-
-        float now = Time.time;
-
-        if (minimalTickAccumulator >= interval)
-        {
-            minimalTickAccumulator = 0f;
-
-            float tierMult = stats != null ? stats.TierBaseSpeedMultiplier : 1f;
-            float baseSpeed = Mathf.Lerp(speedMinA, speedMaxB, 0.5f) * tierMult;
-
-            float noise = 0f;
-            if (rng != null)
-                noise = Mathf.Lerp(-0.08f, 0.08f, (float)rng.NextDouble());
-            else
-                noise = Random.Range(-0.08f, 0.08f);
-
-            float target = Mathf.Max(0f, baseSpeed * (1f + noise));
-
-            bool flip = false;
-            if (rng != null) flip = rng.NextDouble() < 0.05;
-            else flip = Random.value < 0.05f;
-
-            int dir = movement.direction;
-            if (flip) dir = -dir;
-
-            // For minimal: use a noticeable transition for visual smoothness.
-            float transitionTime = Mathf.Max(0.5f, interval / 3f);
-            movement.BeginSpeedTransition(dir, target, transitionTime, now);
-            movement.GuardDirectionAtBounds(transform.position.x);
-        }
-
-        movement.StepSpeed(now);
-        float x = movement.StepPositionX(transform.position.x, dt);
-        Vector3 pos = transform.position;
-        pos.x = x;
-        transform.position = pos;
-
-        // check finish crossing
-        CheckFinishCrossing();
-
-        // clear slowing flag if we've come to rest
-        if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
-    }
-
-    private enum TickMode { Full, Simplified }
-
-    private void TickInternal(float deltaTime, float now, TickMode mode)
-    {
-        if (raceController == null) return;
-        if (!raceController.IsRunning()) return;
-
-        float dt = deltaTime;
-
-        float effectiveD = stats != null ? brain.GetEffectiveStopDuckTimeD(stopDuckTimeD, stats.personality) : stopDuckTimeD;
-        bool inSprintPhase = raceController.remainingTime <= effectiveD;
-
-        UpdateStamina(dt);
-
-        if (visualizer != null) visualizer.UpdateStaminaBar(GetStamina01());
-
-        if (inSprintPhase && isSprint)
-        {
-            StepSprint(dt);
-            // check finish crossing
-            CheckFinishCrossing();
-
-            // clear slowing flag if we've come to rest
-            if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
-            return;
-        }
-
-        if (inSprintPhase && !isSprint)
-        {
-            // freeze: keep current signed speed, just integrate
-            movement.StepSpeed(now);
-            float xLock = movement.StepPositionX(transform.position.x, dt);
-            Vector3 pLock = transform.position;
-            pLock.x = xLock;
-            transform.position = pLock;
-
-            // check finish crossing
-            CheckFinishCrossing();
-
-            // clear slowing flag if we've come to rest
-            if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
-            return;
-        }
-
-        int rank = raceController.GetRankOf(this);
-        int total = raceController.GetRunnerCount();
-
-        if (mode == TickMode.Full)
-        {
-            brain.UpdateMomentum(dt, movement.currentSpeed);
-            brain.UpdateComeback(now, rank);
-        }
-
-        float effectiveC = brain.GetEffectiveRandomInterval(randomIntervalC, stats != null ? stats.personality : DuckStats.Personality.Steady);
-        float transitionTime = brain.GetSpeedTransitionTime(effectiveC);
-
-        // Enforce a minimum transition time so easing is noticeable
-        transitionTime = Mathf.Max(transitionTime, 0.5f);
-
-        var decision = brain.DecideTarget(
-            now,
-            stats,
-            raceController,
-            movement.direction,
-            speedMinA,
-            speedMaxB,
-            randomIntervalC,
-            rank,
-            total);
-
-        if (!float.IsNaN(decision.targetSpeed))
-        {
-            float mult;
-            if (mode == TickMode.Full)
-                mult = brain.ComposeSpeedMultiplier(now, rank, total);
-            else
-                mult = brain.GetRubberBandMultiplier(rank, total);
-
-            float desiredSpeed = decision.targetSpeed * mult;
-
-            // Begin transition using cubic easing inside DuckMovement
-            movement.BeginSpeedTransition(decision.direction, desiredSpeed, transitionTime, now);
-            movement.GuardDirectionAtBounds(transform.position.x);
-
-            if (decision.directionChanged && mode == TickMode.Full)
-                brain.ResetMomentum();
-        }
-
-        // Step speed based on absolute time and then integrate position.
-        movement.StepSpeed(now);
-        float x = movement.StepPositionX(transform.position.x, dt);
-
-        Vector3 pos = transform.position;
-        pos.x = x;
-        transform.position = pos;
-
-        // check finish crossing
-        CheckFinishCrossing();
-
-        // clear slowing flag if we've come to rest
-        if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
-    }
-
-    private void UpdateStamina(float dt)
-    {
-        if (stats == null) return;
-        if (dt <= 0f) return;
-
-        var s = BalanceTuner.Instance != null ? BalanceTuner.Instance.Settings : null;
-        float drainRate = s != null ? Mathf.Max(0f, s.staminaDrainRate) : 1.0f;
-        float regenRate = s != null ? Mathf.Max(0f, s.staminaRegenRate) : 0.015f;
-
-        float drain = dt * Mathf.Max(0f, movement.currentSpeed) * stats.TierStaminaMultiplier * drainRate;
-
-        if (Mathf.Abs(movement.currentSpeed) < 0.25f)
-        {
-            float recover = dt * regenRate;
-            stats.stamina01 = Mathf.Clamp01(stats.stamina01 - drain + recover);
-        }
-        else
-        {
-            stats.stamina01 = Mathf.Clamp01(stats.stamina01 - drain);
-        }
-    }
-
-    private void StepSprint(float dt)
-    {
-        // Use easing-based speed interpolation during sprint; movement will own speed blending.
-        if (sprintTimeRemaining <= 0f)
-        {
-            Vector3 p0 = transform.position;
-            p0.x = sprintTargetWorldX;
-            transform.position = p0;
-            isSprint = false;
-            movement.Reset();
-
-            // restore expanded bounds if any
-            if (sprintExpandedBounds)
-            {
-                movement.maxPosX = savedMaxPosX;
-                sprintExpandedBounds = false;
-            }
-
-            // mark finish if we effectively reached target
-            TryMarkReachedFinishAt(p0.x);
-
-            return;
-        }
-
-        // Advance movement easing based on absolute time
-        movement.StepSpeed(Time.time);
-
-        Vector3 p = transform.position;
-        p.x += movement.currentSpeedSigned * dt;
-
-        // clamp within lane bounds (movement.maxPosX may have been temporarily expanded)
-        float clampedX = Mathf.Clamp(p.x, movement.minPosX, movement.maxPosX);
-        p.x = clampedX;
-
-        // check overshoot / reached
-        int dir = (sprintTargetWorldX >= transform.position.x) ? +1 : -1;
-        if ((dir > 0 && p.x >= sprintTargetWorldX) || (dir < 0 && p.x <= sprintTargetWorldX))
-        {
-            p.x = sprintTargetWorldX;
-            isSprint = false;
-            movement.Reset();
-
-            // restore expanded bounds if any
-            if (sprintExpandedBounds)
-            {
-                movement.maxPosX = savedMaxPosX;
-                sprintExpandedBounds = false;
-            }
-
-            transform.position = p;
-
-            // mark finish if we effectively reached target
-            TryMarkReachedFinishAt(p.x);
-            return;
-        }
-
-        transform.position = p;
-
-        sprintTimeRemaining -= dt;
-        if (sprintTimeRemaining <= 0f && isSprint)
-        {
-            Vector3 pp = transform.position;
-            pp.x = sprintTargetWorldX;
-            transform.position = pp;
-            isSprint = false;
-            movement.Reset();
-
-            if (sprintExpandedBounds)
-            {
-                movement.maxPosX = savedMaxPosX;
-                sprintExpandedBounds = false;
-            }
-
-            // mark finish if we effectively reached target
-            TryMarkReachedFinishAt(pp.x);
-        }
-
-        // check finish crossing
-        CheckFinishCrossing();
-
-        // clear slowing flag if we've come to rest
-        if (movement.currentSpeed <= 0.001f) isSlowingForBound = false;
-    }
-
-    // Helper: if duck reached or was teleported to targetWorldX, record finish time when appropriate.
-    private void TryMarkReachedFinishAt(float worldX)
-    {
-        if (raceController == null) return;
-        if (timeReachedFinish >= 0f) return; // already recorded
-
-        float finishWorldX = raceController.GetFinishWorldX();
-        if (float.IsNaN(finishWorldX))
-        {
-            // If finish world X not available, conservatively mark as reached
-            timeReachedFinish = Time.time;
-            Debug.Log($"Duck index {duckIndex} reached sprint target at {timeReachedFinish:F4} worldX={worldX:F3} (finishWorldX unknown)");
-            return;
-        }
-
-        if (worldX + FinishEpsilon >= finishWorldX)
-        {
-            timeReachedFinish = Time.time;
-            Debug.Log($"Duck index {duckIndex} reached finish at {timeReachedFinish:F4} worldX={worldX:F3}");
-        }
-    }
-
-    // Public: force mark this duck as having reached finish now (used as fallback to ensure at least one finisher)
+    /// <summary>
+    /// World X helper used by LeaderboardUI and testers.
+    /// </summary>
+    public float GetWorldX() => transform.position.x;
+
+    /// <summary>
+    /// Tier used by DuckSystemTester for distribution logging.
+    /// </summary>
+    public DuckStats.Tier GetTier() => stats != null ? stats.tier : DuckStats.Tier.Average;
+
+    /// <summary>
+    /// Personality used by DuckSystemTester for distribution logging.
+    /// </summary>
+    public DuckStats.Personality GetPersonality() => stats != null ? stats.personality : DuckStats.Personality.Steady;
+
+    /// <summary>
+    /// Stamina accessor kept for potential UI usage. In the new system this is
+    /// purely cosmetic and does not affect movement.
+    /// </summary>
+    public float GetStamina01() => stats != null ? stats.stamina01 : 1f;
+
+    public int GetDuckIndex() => duckIndex;
+
+    public float GetTimeReachedFinish() => timeReachedFinish;
+
+    /// <summary>
+    /// Legacy helper: mark this duck as having reached finish "now".
+    /// Used only for analytics / debugging.
+    /// </summary>
     public void ForceMarkReachedFinishNow()
     {
         if (timeReachedFinish >= 0f) return;
         timeReachedFinish = Time.time;
-        Debug.Log($"Duck index {duckIndex} force-marked as reached finish at {timeReachedFinish:F4} worldX={transform.position.x:F3}");
     }
 
-    private void CheckFinishCrossing()
+    /// <summary>
+    /// Reset transform to the initial pose captured at Awake.
+    /// </summary>
+    public void ResetToInitial()
     {
-        if (raceController == null) return;
-        if (timeReachedFinish >= 0f) return; // already recorded
-
-        float finishWorldX = raceController.GetFinishWorldX();
-        if (float.IsNaN(finishWorldX)) return;
-
-        if (transform.position.x + FinishEpsilon >= finishWorldX)
-        {
-            timeReachedFinish = Time.time;
-            Debug.Log("Duck index " + duckIndex + " reached finish at " + timeReachedFinish.ToString("F4") + " worldX=" + transform.position.x.ToString("F3"));
-        }
-    }
-
-    // Notify this duck that it's approaching its movement bound and should slow down over decelTime seconds.
-    public void NotifyApproachingBound(float decelTime)
-    {
-        if (isSprint) return;
-        if (timeReachedFinish >= 0f) return;
-        if (isSlowingForBound) return;
-
-        int dir = movement.direction;
-        // Begin transition to zero speed over decelTime for a smooth stop.
-        movement.BeginSpeedTransition(dir, 0f, Mathf.Max(0.05f, decelTime), Time.time);
-        isSlowingForBound = true;
-    }
-
-    public void ResetToInitial(Vector3 pos, Quaternion rot)
-    {
-        transform.position = pos;
-        transform.rotation = rot;
-
-        movement.Reset();
-        isSprint = false;
-        sprintTimeRemaining = 0f;
-
-        if (stats != null) stats.stamina01 = 1f;
-        minimalTickAccumulator = 0f;
-
-        // reset finish time
+        transform.position = initialPosition;
+        transform.rotation = initialRotation;
         timeReachedFinish = -1f;
-
-        // restore expanded bounds just in case
-        if (sprintExpandedBounds)
-        {
-            movement.maxPosX = savedMaxPosX;
-            sprintExpandedBounds = false;
-        }
     }
 
-    public float GetWorldX() => transform.position.x;
+    /// <summary>
+    /// Legacy API compatibility stubs.
+    /// These are no-ops or simple helpers so older UI / tools won't break.
+    /// Movement is owned by DuckBrain and RaceController now.
+    /// </summary>
+    public float GetEffectiveStopDuckTimeD(float globalD) => globalD;
 
-    public float GetEffectiveStopDuckTimeD(float globalD)
-    {
-        return stats != null ? brain.GetEffectiveStopDuckTimeD(globalD, stats.personality) : globalD;
-    }
+    public bool IsSprinting() => false;
 
-    public bool IsSprinting() => isSprint;
+    public float GetMaxPosX() => transform.position.x;
 
-    public float GetStamina01() => stats != null ? stats.stamina01 : 1f;
+    public bool IsSlowingForBound() => false;
 
-    public DuckStats.Tier GetTier() => stats != null ? stats.tier : DuckStats.Tier.Average;
-
-    public DuckStats.Personality GetPersonality() => stats != null ? stats.personality : DuckStats.Personality.Steady;
-
-    public float GetTimeReachedFinish() => timeReachedFinish;
-
-    public int GetDuckIndex() => duckIndex;
-
-    public float GetMaxPosX() => movement.maxPosX;
-
-    public bool IsSlowingForBound() => isSlowingForBound;
+    public void NotifyApproachingBound(float decelTime) { }
 
     public void StartSprintToWorldX(float targetWorldX, float totalTime)
     {
-        if (float.IsNaN(targetWorldX) || totalTime <= 0f) return;
-
-        // Allow sprint target beyond current movement.maxPosX by temporarily expanding the bound for this duck only.
-        if (movement.maxPosX < targetWorldX)
-        {
-            savedMaxPosX = movement.maxPosX;
-            movement.maxPosX = targetWorldX;
-            sprintExpandedBounds = true;
-        }
-
-        // Clamp target within bounds to avoid sprinting outside the lane (movement.maxPosX may have been expanded above).
-        float clampedTarget = Mathf.Clamp(targetWorldX, movement.minPosX, movement.maxPosX);
-
-        // Immediately cancel any ongoing easing transition so sprint uses explicit acceleration
-        movement.StopTransition();
-
-        sprintTargetWorldX = clampedTarget;
-        sprintTotalTime = Mathf.Max(0.0001f, totalTime);
-        sprintTimeRemaining = sprintTotalTime;
-        isSprint = true;
-
-        float x = transform.position.x;
-        float distance = Mathf.Abs(sprintTargetWorldX - x);
-
-        if (distance <= 0.0001f)
-        {
-            isSprint = false;
-            movement.Reset();
-
-            if (sprintExpandedBounds)
-            {
-                movement.maxPosX = savedMaxPosX;
-                sprintExpandedBounds = false;
-            }
-            return;
-        }
-
-        int dir = (sprintTargetWorldX > x) ? +1 : -1;
-
-        // sample signed speed along sprint direction (positive if already moving toward target)
-        float v0_along = movement.currentSpeedSigned * dir; // can be negative if moving opposite
-        float v1 = (2f * distance / sprintTotalTime) - v0_along;
-        v1 = Mathf.Max(0f, v1);
-
-        // apply computed sprint final speed and start easing-based sprint
-        sprintFinalSpeed = v1;
-        sprintAccel = (sprintFinalSpeed - Mathf.Max(0f, movement.currentSpeed)) / sprintTotalTime;
-
-        movement.BeginSpeedTransition(dir, sprintFinalSpeed, sprintTotalTime, Time.time);
+        // In the new system, sprint behavior is encoded inside DuckBrain via Progress P.
+        // For compatibility we can simply snap towards the target X if requested.
+        if (float.IsNaN(targetWorldX)) return;
+        var pos = transform.position;
+        pos.x = targetWorldX;
+        transform.position = pos;
+        ForceMarkReachedFinishNow();
     }
 
-    public void StopSprint()
-    {
-        isSprint = false;
-        sprintTimeRemaining = 0f;
-        sprintTotalTime = 0f;
-        sprintAccel = 0f;
-        sprintFinalSpeed = 0f;
-
-        if (sprintExpandedBounds)
-        {
-            movement.maxPosX = savedMaxPosX;
-            sprintExpandedBounds = false;
-        }
-
-        // cancel any bound slow
-        isSlowingForBound = false;
-    }
+    public void StopSprint() { }
 }

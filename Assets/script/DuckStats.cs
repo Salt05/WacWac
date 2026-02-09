@@ -2,119 +2,185 @@ using System;
 using UnityEngine;
 
 /// <summary>
-/// Phase 1: duck "personality" + tier + stamina + consistency container.
-/// Pure data + helper functions so DuckMover can stay mostly unchanged.
+/// DuckStats - Simplified duck data.
+/// No stamina, no personality system.
+/// Each duck only has: FinalProgress (ranking), action frequency, speed.
+/// All parameters are public for Inspector tuning.
 /// </summary>
 [Serializable]
 public sealed class DuckStats
 {
-    public enum Tier
+    #region Enums
+
+    /// <summary>
+    /// Duck movement action (Forward / Idle / Backward)
+    /// </summary>
+    public enum DuckAction
     {
-        Slow = 0,
-        Average = 1,
-        Fast = 2,
-        VeryFast = 3
+        Forward,    // Moving forward
+        Idle,       // Standing still
+        Backward    // Moving backward
     }
 
+    /// <summary>
+    /// Legacy tier kept for DuckVisualizer/DuckSystemTester compatibility.
+    /// No gameplay effect.
+    /// </summary>
+    public enum Tier
+    {
+        Slow,
+        Average,
+        Fast,
+        VeryFast
+    }
+
+    /// <summary>
+    /// Legacy personality enum kept for compatibility.
+    /// No gameplay effect.
+    /// </summary>
     public enum Personality
     {
         Steady = 0,
-        Erratic = 1,
-        Sprinter = 2,
-        Starter = 3,
-        Choker = 4
+        Sprinter = 1,
+        Underdog = 2,
+        Gambler = 3
     }
+
+    #endregion
+
+    #region Fields
 
     [Header("Identity")]
     public int duckIndex;
 
-    [Header("Core")]
+    [Header("Current Action State")]
+    [SerializeField] private DuckAction currentAction = DuckAction.Idle;
+    [SerializeField] private float targetSpeed;           // Current target speed for this action cycle
+    [SerializeField] private float actionDuration;        // Total duration of current action cycle
+    [SerializeField] private float actionTimer;           // Time remaining in current action cycle
+    [SerializeField] private bool waitingForPhaseUpdate;  // Waiting to finish cycle before switching to new phase config
+
+    [Header("Legacy Compatibility")]
     public Tier tier = Tier.Average;
     public Personality personality = Personality.Steady;
+    [Range(0f, 1f)] public float stamina01 = 1f;
 
-    [Range(0f, 1f)]
-    public float stamina01 = 1f;
+    #endregion
+
+    #region Properties
+
+    public DuckAction CurrentAction => currentAction;
+    public float TargetSpeed => targetSpeed;
+    public float ActionDuration => actionDuration;
+    public float ActionTimer => actionTimer;
+    public bool IsWaitingForPhaseUpdate => waitingForPhaseUpdate;
+
+    /// <summary>Has current action cycle completed?</summary>
+    public bool IsActionComplete => actionTimer <= 0f;
+
+    #endregion
+
+    #region Initialization
+
+    public void Initialize(int index)
+    {
+        duckIndex = index;
+        currentAction = DuckAction.Idle;
+        targetSpeed = 0f;
+        actionDuration = 0f;
+        actionTimer = 0f;
+        waitingForPhaseUpdate = false;
+        stamina01 = 1f;
+    }
+
+    #endregion
+
+    #region Action Management
 
     /// <summary>
-    /// 0..1 where 1 = very stable, 0 = very volatile.
+    /// Start a new random action cycle with given phase config ranges.
     /// </summary>
-    [Range(0f, 1f)]
-    public float consistency01 = 0.6f;
-
-    public float TierBaseSpeedMultiplier
+    public void StartNewAction(
+        float frequencyMin, float frequencyMax,
+        float forwardSpeedMin, float forwardSpeedMax,
+        float backwardSpeedMin, float backwardSpeedMax,
+        System.Random rng)
     {
-        get
-        {
-            var s = BalanceTuner.Instance != null ? BalanceTuner.Instance.Settings : null;
-            if (s != null)
-            {
-                switch (tier)
-                {
-                    case Tier.Slow: return s.slowMultiplier;
-                    case Tier.Average: return s.averageMultiplier;
-                    case Tier.Fast: return s.fastMultiplier;
-                    case Tier.VeryFast: return s.veryFastMultiplier;
-                }
-            }
+        // 1. Random action duration (frequency)
+        float baseDuration = LerpFloat(frequencyMin, frequencyMax, (float)rng.NextDouble());
 
-            switch (tier)
-            {
-                case Tier.Slow: return 0.7f;
-                case Tier.Average: return 1.0f;
-                case Tier.Fast: return 1.3f;
-                case Tier.VeryFast: return 1.6f;
-                default: return 1.0f;
-            }
+        // 2. Random action type: Forward, Idle, or Backward (equal 1/3 probability)
+        int actionRoll = rng.Next(0, 3);
+        currentAction = (DuckAction)actionRoll;
+
+        // 3. Random speed based on action
+        float cycleDuration = baseDuration;
+        switch (currentAction)
+        {
+            case DuckAction.Forward:
+                targetSpeed = LerpFloat(forwardSpeedMin, forwardSpeedMax, (float)rng.NextDouble());
+                break;
+            case DuckAction.Backward:
+                targetSpeed = LerpFloat(backwardSpeedMin, backwardSpeedMax, (float)rng.NextDouble());
+                break;
+            case DuckAction.Idle:
+            default:
+                targetSpeed = 0f;
+                cycleDuration = baseDuration * 0.5f;
+                break;
+        }
+
+        actionDuration = cycleDuration;
+        actionTimer = cycleDuration;
+
+        waitingForPhaseUpdate = false;
+    }
+
+    /// <summary>
+    /// Tick the action timer down by deltaTime.
+    /// </summary>
+    public void TickActionTimer(float deltaTime)
+    {
+        if (actionTimer > 0f)
+        {
+            actionTimer -= deltaTime;
         }
     }
 
-    public float TierStaminaMultiplier
+    /// <summary>
+    /// Mark that this duck should update to new phase config after current action completes.
+    /// Used for Phase 1 -> Phase 2 transition (wait for cycle to finish).
+    /// </summary>
+    public void MarkWaitingForPhaseUpdate()
     {
-        get
-        {
-            // Light weighting for now (can be tuned later).
-            switch (tier)
-            {
-                case Tier.Slow: return 0.85f;
-                case Tier.Average: return 1.0f;
-                case Tier.Fast: return 1.15f;
-                case Tier.VeryFast: return 1.30f;
-                default: return 1.0f;
-            }
-        }
+        waitingForPhaseUpdate = true;
     }
 
     /// <summary>
-    /// When stamina is low: max speed should be reduced.
-    /// Returns a multiplier applied to current max speed.
+    /// Force-stop current action immediately.
+    /// Used for Phase 2 -> Phase 3 transition (instant cancel).
     /// </summary>
-    public float GetStaminaLimitedMaxSpeedMultiplier()
+    public void ForceStopAction()
     {
-        float threshold = 0.30f;
-        var s = BalanceTuner.Instance != null ? BalanceTuner.Instance.Settings : null;
-        if (s != null) threshold = Mathf.Clamp01(s.lowStaminaThreshold);
+        actionTimer = 0f;
+        currentAction = DuckAction.Idle;
+        targetSpeed = 0f;
+        waitingForPhaseUpdate = false;
+    }
 
-        if (stamina01 >= threshold) return 1f;
+    #endregion
 
-        // Map threshold -> 1.0, 0.00 -> 0.70
-        float t = Mathf.InverseLerp(0f, Mathf.Max(0.0001f, threshold), stamina01);
-        return Mathf.Lerp(0.70f, 1.0f, t);
+    #region Utility
+
+    private static float LerpFloat(float a, float b, float t)
+    {
+        return a + (b - a) * t;
     }
 
     /// <summary>
-    /// When stamina is low: variability should increase.
-    /// Returns a multiplier applied to noise amplitude.
+    /// Stub for legacy compatibility - always returns 1.0 (no stamina system).
     /// </summary>
-    public float GetLowStaminaVariabilityMultiplier()
-    {
-        float threshold = 0.30f;
-        var s = BalanceTuner.Instance != null ? BalanceTuner.Instance.Settings : null;
-        if (s != null) threshold = Mathf.Clamp01(s.lowStaminaThreshold);
+    public float GetStaminaNormalized() => 1f;
 
-        if (stamina01 >= threshold) return 1f;
-
-        // Map threshold -> 1.0, 0.00 -> 1.6
-        float t = Mathf.InverseLerp(0f, Mathf.Max(0.0001f, threshold), stamina01);
-        return Mathf.Lerp(1.6f, 1.0f, t);
-    }
+    #endregion
 }

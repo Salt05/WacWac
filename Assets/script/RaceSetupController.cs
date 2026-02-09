@@ -6,7 +6,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 
-// Controller cho màn hình thi?t l?p cu?c ?ua
+// Controller cho mï¿½n hï¿½nh thi?t l?p cu?c ?ua
 public class RaceSetupController : MonoBehaviour
 {
     [Header("Time display")]
@@ -21,7 +21,7 @@ public class RaceSetupController : MonoBehaviour
     public Slider duckSlider;
     public TextMeshProUGUI duckCountText;
     public Transform previewParent;
-    public GameObject duckPreviewPrefab; // prefab cho 1 con v?t preview (có Image + Text)
+    public GameObject duckPreviewPrefab; // prefab cho 1 con v?t preview (cï¿½ Image + Text)
     public int previewSlots = 6;
 
     [Header("Navigation")]
@@ -92,12 +92,9 @@ public class RaceSetupController : MonoBehaviour
     private void OnSetPressed()
     {
         int seconds = GetTotalSeconds();
-        if (seconds <= 0)
-        {
-            Debug.Log("Th?i gian ph?i l?n h?n 0");
-            return;
-        }
-        hasSet = true;
+
+        // Load dedicated race scene (legacy behavior)
+        SceneManager.LoadScene("RaceScene");
         // optionally provide feedback
         Debug.Log($"Set time: {seconds}s");
     }
@@ -109,7 +106,7 @@ public class RaceSetupController : MonoBehaviour
         // hide setup UI (assume this GameObject is the setup UI root)
         this.gameObject.SetActive(false);
 
-        // start race in same scene: notify RaceController ho?c các h? th?ng khác
+        // start race in same scene: notify RaceController ho?c cï¿½c h? th?ng khï¿½c
         // We'll keep RaceConfig updated and assume race scene logic listens to it or is in same scene
     }
 
