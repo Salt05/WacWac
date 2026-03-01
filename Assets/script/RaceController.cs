@@ -50,10 +50,19 @@ public class RaceController : MonoBehaviour
     [Header("UI")]
     public TextMeshProUGUI countdownText;
     public Button startButton;
-    public Button pauseButton;
-    public Button continueButton;
+    public Button pauseButton;   // Được dùng như nút toggle Pause/Continue
+    public Button continueButton; // Không còn dùng, giữ lại chỉ để không vỡ Inspector cũ
     public Button clearButton;
     public Button backButton;
+
+    [Header("Pause Toggle Visuals")]
+    [SerializeField] private Sprite pauseSprite;     // Sprite mặc định (Pause)
+    [SerializeField] private Sprite continueSprite;  // Sprite khi đang Paused (Continue)
+    
+    [Header("Intro Flag Animation")]
+    [SerializeField] private Transform flagImage;   // Flag_Image trong RaceScene (UI hoặc world)
+    [SerializeField] private Transform targetA;     // Target_A mà cờ sẽ di chuyển tới
+    [SerializeField] private float flagMoveDuration = 0.7f; // Thời gian animation easeInBack
 
     [Header("Anchors")]
     [Tooltip("RectTransform của vùng Spawn. Vịt được sinh làm con của RectTransform này. Width/Height dùng cho công thức spawn đường chéo.")]
@@ -176,8 +185,7 @@ public class RaceController : MonoBehaviour
     {
         // Wire up buttons
         if (startButton != null) startButton.onClick.AddListener(OnStartPressed);
-        if (pauseButton != null) pauseButton.onClick.AddListener(OnPausePressed);
-        if (continueButton != null) continueButton.onClick.AddListener(OnContinuePressed);
+        if (pauseButton != null) pauseButton.onClick.AddListener(OnPauseTogglePressed);
         if (clearButton != null) clearButton.onClick.AddListener(OnClearPressed);
         if (backButton != null) backButton.onClick.AddListener(OnBackPressed);
 
@@ -189,6 +197,9 @@ public class RaceController : MonoBehaviour
         }
 
         StartCoroutine(InitializeRace());
+
+        // Khởi tạo sprite nút pause/continue theo trạng thái ban đầu
+        UpdatePauseButtonVisual();
     }
 
     private void Update()
@@ -259,6 +270,12 @@ public class RaceController : MonoBehaviour
         state = GameState.Ready;
 
         UpdateCountdownUI();
+
+        // Sau khi spam ducks xong, chạy intro Flag_Image -> Target_A bằng easeInBack
+        if (flagImage != null && targetA != null && flagMoveDuration > 0f)
+        {
+            StartCoroutine(PlayFlagIntroAnimation());
+        }
     }
 
     private void CalculateL()
@@ -327,6 +344,30 @@ public class RaceController : MonoBehaviour
         if (RaceConfig.Instance != null && RaceConfig.Instance.duckNames != null)
             names = RaceConfig.Instance.duckNames;
 
+        // Decide whether to use names or numbers for labels based on RaceConfig preference
+        bool useNames = false;
+        RaceConfig cfg = RaceConfig.Instance;
+        if (cfg != null)
+        {
+            switch (cfg.namePreference)
+            {
+                case RaceConfig.NameSourcePreference.PreferNumbers:
+                    useNames = false; // luôn dùng số, bỏ qua danh sách tên nếu có
+                    break;
+                case RaceConfig.NameSourcePreference.PreferNames:
+                    useNames = (names != null && names.Length > 0);
+                    break;
+                default: // Auto
+                    useNames = (names != null && names.Length > 0);
+                    break;
+            }
+        }
+        else
+        {
+            // Không có RaceConfig -> fallback: nếu có danh sách tên thì dùng, không thì dùng số
+            useNames = (names != null && names.Length > 0);
+        }
+
         // SPAWN ASCENDING: k=1 to n ensures ducks[i].DuckId == i
         // Z-ORDER: Use SetAsFirstSibling() so earlier spawned ducks (higher Y, top lanes) 
         // are pushed behind later spawned ducks (lower Y, bottom lanes)
@@ -376,10 +417,16 @@ public class RaceController : MonoBehaviour
             var label = go.GetComponentInChildren<TextMeshProUGUI>();
             if (label != null)
             {
-                if (names != null && duckId < names.Length && !string.IsNullOrWhiteSpace(names[duckId]))
+                if (useNames && names != null && duckId < names.Length && !string.IsNullOrWhiteSpace(names[duckId]))
+                {
+                    // Đang ở chế độ tên: chỉ hiển thị tên, không trộn số
                     label.text = names[duckId];
+                }
                 else
+                {
+                    // Đang ở chế độ số (hoặc không có tên hợp lệ): chỉ hiển thị số thứ tự
                     label.text = (duckId + 1).ToString();
+                }
             }
 
             // Get or add DuckBrain
@@ -643,6 +690,22 @@ public class RaceController : MonoBehaviour
             state = GameState.Running;
             Time.timeScale = 1f;
             ResumeAllScrollers();
+            UpdatePauseButtonVisual();
+        }
+        else if (state == GameState.Paused)
+        {
+            OnContinuePressed();
+        }
+    }
+
+    /// <summary>
+    /// Nút pause duy nhất: khi đang Running thì Pause, khi đang Paused thì Continue.
+    /// </summary>
+    private void OnPauseTogglePressed()
+    {
+        if (state == GameState.Running)
+        {
+            OnPausePressed();
         }
         else if (state == GameState.Paused)
         {
@@ -656,6 +719,7 @@ public class RaceController : MonoBehaviour
         state = GameState.Paused;
         Time.timeScale = 0f;
         PauseAllScrollers();
+        UpdatePauseButtonVisual();
     }
 
     private void OnContinuePressed()
@@ -664,6 +728,7 @@ public class RaceController : MonoBehaviour
         state = GameState.Running;
         Time.timeScale = 1f;
         ResumeAllScrollers();
+        UpdatePauseButtonVisual();
     }
 
     private void OnClearPressed()
@@ -676,6 +741,9 @@ public class RaceController : MonoBehaviour
         ResetFinishLine();
 
         StartCoroutine(InitializeRace());
+
+        // Sau khi clear, đưa nút pause về trạng thái Pause (vì race sẽ Ready)
+        UpdatePauseButtonVisual();
     }
 
     /// <summary>
@@ -696,6 +764,55 @@ public class RaceController : MonoBehaviour
         UnityEngine.SceneManagement.SceneManager.LoadScene("SetupScene");
     }
 
+    /// <summary>
+    /// Cập nhật sprite cho nút Pause/Continue dựa trên trạng thái hiện tại.
+    /// - Ready / Running  -> sprite Pause
+    /// - Paused           -> sprite Continue
+    /// </summary>
+    private void UpdatePauseButtonVisual()
+    {
+        if (pauseButton == null) return;
+
+        var image = pauseButton.GetComponent<Image>();
+        if (image == null) return;
+
+        if (state == GameState.Paused)
+        {
+            if (continueSprite != null)
+                image.sprite = continueSprite;
+        }
+        else
+        {
+            if (pauseSprite != null)
+                image.sprite = pauseSprite;
+        }
+    }
+
+    /// <summary>
+    /// Intro: di chuyển Flag_Image tới Target_A bằng easeInBack khi vào RaceScene.
+    /// </summary>
+    private IEnumerator PlayFlagIntroAnimation()
+    {
+        Vector3 startPos = flagImage.position;
+        Vector3 endPos = targetA.position;
+
+        float elapsed = 0f;
+
+        while (elapsed < flagMoveDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / flagMoveDuration);
+
+            // EaseInBack: bắt đầu lùi nhẹ rồi mới tiến tới đích
+            float eased = EaseInBack(t);
+            flagImage.position = Vector3.Lerp(startPos, endPos, eased);
+
+            yield return null;
+        }
+
+        flagImage.position = endPos;
+    }
+
     private void FinishRace()
     {
         state = GameState.Finished;
@@ -713,6 +830,19 @@ public class RaceController : MonoBehaviour
         DisplayLeaderboard();
 
         Debug.Log("Race Finished!");
+    }
+
+    /// <summary>
+    /// Easing hàm EaseInBack (0..1) -> 0..1.
+    /// Bắt đầu chậm, hơi lùi lại rồi tăng tốc về đích.
+    /// </summary>
+    private float EaseInBack(float t)
+    {
+        t = Mathf.Clamp01(t);
+        const float c1 = 1.70158f;
+        const float c3 = c1 + 1f;
+        // Công thức chuẩn EaseInBack
+        return c3 * t * t * t - c1 * t * t;
     }
 
     private void DisplayLeaderboard()

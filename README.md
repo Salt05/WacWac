@@ -757,3 +757,15 @@ Cho mỗi vịt (Duck):
 - [ ] Race nào cũng có cảm giác đủ drama (đầu bám – giữa giãn – cuối bứt). 
 - [ ] Thêm/tắt hiệu ứng hình ảnh không làm thay đổi kết quả.
 - [ ] Vạch đích di chuyển tốc độ không đổi (không dùng Cubic cho vạch đích).
+
+## Setup Scene Specifications
+
+- **Hiển thị & Phản hồi Nút bấm (Button Visuals & Feedback)**:Sử dụng hiệu ứng đổi màu (tô màu tối hơn) đơn giản cho trạng thái nút được nhấn và đang được chọn/active.
+
+- **Keypad & Bảng thông tin (Quantity Mode)**: Keypad được bổ sung nút Clear để reset bảng đang active (GUI_Time hoặc GUI_Ducks) về giá trị 0/mặc định. Khi chuyển sang chế độ Set Names, keypad **không bị ẩn đi**; tuy nhiên, GUI_Ducks sẽ **ngừng nhận input từ keypad** và tự động đồng bộ (auto-sync) để hiển thị **tổng số vịt hiện đang có trong Name List**.
+
+- **UI Quản lý Tên (Name Management UI – Name Mode)**: Khi nhấn Set Names, phần UI nhập & danh sách tên (Name UI: list + input) sẽ trượt mượt từ bên phải màn hình vào, dừng ở cạnh phải màn hình. Mỗi tên vịt bị giới hạn tối đa **10 ký tự**. Mỗi item trong danh sách có thể **click trực tiếp để chỉnh sửa**, và có nút "X" riêng để **xoá từng con vịt**. Bên dưới danh sách có nút **Clear All** để **xóa toàn bộ tên** hiện có.
+
+- **Lưu & Tải dữ liệu (Data Persistence – Save/Load)**: Danh sách tên vịt được lưu cục bộ xuống một file **.txt**. Khi vào lại Setup Scene, hệ thống sẽ đọc file này để **khôi phục lại roster trước đó**, đảm bảo danh sách tên không bị mất giữa các lần chơi.
+
+- **Chuyển cảnh với hiệu ứng cờ đua (Scene Transition – Flag Wipe Effect)**: Trong Setup Scene, khi nhấn **Start Race!**, một lá cờ caro (checkered flag) khổ lớn sẽ trượt mượt để **che kín toàn bộ màn hình**, di chuyển tới vị trí **GameObject_Target_A**. Khi cờ đã che kín màn hình, hệ thống gọi `SceneManager.LoadScene("RaceScene")`. Ở Race Scene, cảnh bắt đầu với lá cờ **đang ở vị trí che toàn bộ màn hình** (GameObject_Target_A). Sau khi **toàn bộ vịt spawn xong**, lá cờ sẽ trượt mượt ra khỏi màn hình, di chuyển tới **GameObject_Target_B**, từ từ **lộ ra đường đua** và bắt đầu **countdown**.
