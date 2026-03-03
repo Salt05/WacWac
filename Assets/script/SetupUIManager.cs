@@ -34,6 +34,38 @@ public class SetupUIManager : MonoBehaviour
 
     #endregion
 
+    #region Time Formatting Helpers
+
+    private string FormatTimeFromDigits(string digits)
+    {
+        if (string.IsNullOrEmpty(digits)) return "00:00";
+
+        // Pad left with zeros to get MMSS
+        string padded = digits.PadLeft(4, '0');
+        string mmStr = padded.Substring(0, 2);
+        string ssStr = padded.Substring(2, 2);
+
+        return mmStr + ":" + ssStr;
+    }
+
+    private int TimeDigitsToSeconds(string digits)
+    {
+        if (string.IsNullOrEmpty(digits)) return 0;
+
+        string padded = digits.PadLeft(4, '0');
+        string mmStr = padded.Substring(0, 2);
+        string ssStr = padded.Substring(2, 2);
+
+        if (int.TryParse(mmStr, out int mm) && int.TryParse(ssStr, out int ss))
+        {
+            return (mm * 60) + ss;
+        }
+
+        return 0;
+    }
+
+    #endregion
+
     #region Serialized Fields
 
     [Header("Display Text References")]
@@ -49,11 +81,15 @@ public class SetupUIManager : MonoBehaviour
     [SerializeField] private Button btn_SelectDucks;         // Button to select Ducks board
     [SerializeField] private Button btn_SetNames;            // Toggle button: switches between Quantity <-> Names
 
+    [Header("Board UI Roots")]
+    [SerializeField] private RectTransform guiTimeRoot;      // GUI_Time
+    [SerializeField] private RectTransform guiDucksRoot;     // GUI_Ducks
+
     [Header("Name Management Panel")]
     [SerializeField] private RectTransform panelNameManagement;  // The sliding panel for name management
     [SerializeField] private TMP_InputField inputFieldDuckName;  // Input field for entering new names
     [SerializeField] private Button btn_AddName;                  // Button to add a new name
-    [SerializeField] private Button btn_CloseNamePanel;          // Button to close the name panel
+    [SerializeField] private Button btn_ClearNames;              // Button to clear all names (btn_clear)
     [SerializeField] private Transform contentTransform;          // Parent transform for name items (ScrollView content)
     [SerializeField] private GameObject prefabNameItem;           // Prefab for individual name items
 
@@ -72,6 +108,10 @@ public class SetupUIManager : MonoBehaviour
     [SerializeField] private Vector2 panelHiddenPosition = new Vector2(800f, 0f);   // Off-screen position (right)
     [SerializeField] private Vector2 panelVisiblePosition = new Vector2(0f, 0f);    // On-screen position
 
+    [Header("Board Select Animation")]
+    [SerializeField] private float boardSelectScale = 1.12f;
+    [SerializeField] private float boardSelectDuration = 0.28f;
+
     [Header("Value Limits")]
     [SerializeField] private int maxTimeValue = 999;         // Maximum race time value
     [SerializeField] private int maxDuckCount = 99;          // Maximum number of ducks
@@ -86,11 +126,17 @@ public class SetupUIManager : MonoBehaviour
 
     private string timeValueString = "";
     private string duckCountString = "";
+    // Buffer storing entered time digits (newest digit at front).
+    // Example entry sequence: press 3 -> "3" (displays 00:03)
+    // then press 5 -> "53" (displays 00:53), press 2 -> "253" (displays 02:53)
+    private string timeDigits = "";
 
     private List<GameObject> nameItemInstances = new List<GameObject>();  // Track instantiated name items
 
     private Coroutine panelSlideCoroutine;   // Reference to current slide coroutine
     private int currentEditingIndex = -1;    // Index of name being edited (-1 = none)
+    private Coroutine boardSelectUpCoroutine;
+    private Coroutine boardSelectDownCoroutine;
 
     #endregion
 
@@ -180,7 +226,14 @@ public class SetupUIManager : MonoBehaviour
         // Khôi phục lại giá trị thời gian đã set (nếu > 0)
         if (config.durationSeconds > 0)
         {
-            timeValueString = config.durationSeconds.ToString();
+            // Convert seconds to MMSS digits buffer (newest-first storage)
+            int total = config.durationSeconds;
+            int mm = total / 60;
+            int ss = total % 60;
+            string s = mm.ToString("00") + ss.ToString("00"); // e.g. "0253"
+            // store as newest-first buffer by trimming leading zeros
+            timeDigits = s.TrimStart('0');
+            if (timeDigits == "0000") timeDigits = "";
         }
 
         // Khôi phục lại quantity (số lượng vịt) từ quantityNumeric (giá trị người chơi set ở chế độ số)
@@ -238,11 +291,10 @@ public class SetupUIManager : MonoBehaviour
             btn_AddName.onClick.AddListener(OnAddNamePressed);
         }
 
-        // Close Name Panel button
-        if (btn_CloseNamePanel != null)
+        // Clear Names button
+        if (btn_ClearNames != null)
         {
-            // Optional: also use the close button to toggle back to Quantity mode
-            btn_CloseNamePanel.onClick.AddListener(OnCloseNamePanelPressed);
+            btn_ClearNames.onClick.AddListener(OnClearNamesPressed);
         }
 
         // Input field submit on Enter key
@@ -295,20 +347,10 @@ public class SetupUIManager : MonoBehaviour
     /// </summary>
     private void AppendToTimeValue(int digit)
     {
-        string newValue = timeValueString + digit.ToString();
-
-        // Check if new value exceeds maximum
-        if (int.TryParse(newValue, out int parsed))
-        {
-            if (parsed <= maxTimeValue)
-            {
-                timeValueString = newValue;
-            }
-            else
-            {
-                Debug.Log($"[SetupUIManager] Time value would exceed max ({maxTimeValue}). Input ignored.");
-            }
-        }
+        // Append newest digit to the end of the buffer
+        timeDigits = timeDigits + digit.ToString();
+        // Keep at most 4 digits (MMSS)
+        if (timeDigits.Length > 4) timeDigits = timeDigits.Substring(timeDigits.Length - 4, 4);
     }
 
     /// <summary>
@@ -317,17 +359,22 @@ public class SetupUIManager : MonoBehaviour
     private void AppendToDuckCount(int digit)
     {
         string newValue = duckCountString + digit.ToString();
+        int maxDigits = maxDuckCount.ToString().Length;
 
-        // Check if new value exceeds maximum
+        if (newValue.Length > maxDigits)
+        {
+            return;
+        }
+
         if (int.TryParse(newValue, out int parsed))
         {
-            if (parsed <= maxDuckCount)
+            if (parsed > maxDuckCount)
             {
-                duckCountString = newValue;
+                duckCountString = maxDuckCount.ToString();
             }
             else
             {
-                Debug.Log($"[SetupUIManager] Duck count would exceed max ({maxDuckCount}). Input ignored.");
+                duckCountString = newValue;
             }
         }
     }
@@ -341,7 +388,7 @@ public class SetupUIManager : MonoBehaviour
         switch (activeBoard)
         {
             case ActiveBoard.Time:
-                timeValueString = "";
+                timeDigits = "";
                 Debug.Log("[SetupUIManager] Time value cleared.");
                 break;
             case ActiveBoard.Ducks:
@@ -371,6 +418,7 @@ public class SetupUIManager : MonoBehaviour
     {
         activeBoard = board;
         UpdateBoardButtonVisuals();
+        PlayBoardSelectAnimation(board);
         Debug.Log($"[SetupUIManager] Selected board: {board}");
     }
 
@@ -399,6 +447,121 @@ public class SetupUIManager : MonoBehaviour
                 ducksImage.color = (activeBoard == ActiveBoard.Ducks) ? activeColor : normalColor;
             }
         }
+    }
+
+    private void PlayBoardSelectAnimation(ActiveBoard board)
+    {
+        RectTransform target = (board == ActiveBoard.Time) ? guiTimeRoot : guiDucksRoot;
+        RectTransform other = (board == ActiveBoard.Time) ? guiDucksRoot : guiTimeRoot;
+
+        if (target == null)
+        {
+            return;
+        }
+
+        if (boardSelectUpCoroutine != null)
+        {
+            StopCoroutine(boardSelectUpCoroutine);
+        }
+
+        if (boardSelectDownCoroutine != null)
+        {
+            StopCoroutine(boardSelectDownCoroutine);
+        }
+
+        boardSelectUpCoroutine = StartCoroutine(AnimateScale(target, Vector3.one, Vector3.one * boardSelectScale, false));
+        if (other != null)
+        {
+            boardSelectDownCoroutine = StartCoroutine(AnimateScale(other, other.localScale, Vector3.one, true));
+        }
+    }
+
+    private IEnumerator AnimateScale(RectTransform target, Vector3 from, Vector3 to, bool isDown)
+    {
+        float duration = Mathf.Max(0.01f, boardSelectDuration);
+        float t = 0f;
+
+        while (t < duration)
+        {
+            t += Time.unscaledDeltaTime;
+            float p = Mathf.Clamp01(t / duration);
+            float eased = EaseInCubic(p);
+            target.localScale = Vector3.LerpUnclamped(from, to, eased);
+            yield return null;
+        }
+
+        target.localScale = to;
+        if (isDown)
+        {
+            boardSelectDownCoroutine = null;
+        }
+        else
+        {
+            boardSelectUpCoroutine = null;
+        }
+    }
+
+    private static float EaseInCubic(float t)
+    {
+        t = Mathf.Clamp01(t);
+        return t * t * t;
+    }
+
+    private IEnumerator AnimateItemShrink(Transform target, float duration)
+    {
+        if (target == null) yield break;
+
+        Vector3 startScale = target.localScale;
+        Vector3 endScale = Vector3.zero;
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            if (target == null) yield break;
+
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / duration);
+            float eased = EaseOutCubic(t);
+            target.localScale = Vector3.LerpUnclamped(startScale, endScale, eased);
+            yield return null;
+        }
+
+        if (target != null)
+        {
+            target.localScale = endScale;
+        }
+    }
+
+    private IEnumerator AnimateItemShrinkAndDestroy(Transform target, float duration)
+    {
+        if (target == null) yield break;
+
+        Vector3 startScale = target.localScale;
+        Vector3 endScale = Vector3.zero;
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            if (target == null) yield break;
+
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / duration);
+            float eased = EaseOutCubic(t);
+            target.localScale = Vector3.LerpUnclamped(startScale, endScale, eased);
+            yield return null;
+        }
+
+        if (target != null)
+        {
+            target.localScale = endScale;
+            Destroy(target.gameObject);
+        }
+    }
+
+    private static float EaseOutCubic(float t)
+    {
+        t = Mathf.Clamp01(t);
+        return 1f - Mathf.Pow(1f - t, 3f);
     }
 
     /// <summary>
@@ -442,7 +605,7 @@ public class SetupUIManager : MonoBehaviour
         // Update Time display
         if (text_TimeValue != null)
         {
-            text_TimeValue.text = string.IsNullOrEmpty(timeValueString) ? "0" : timeValueString;
+            text_TimeValue.text = FormatTimeFromDigits(timeDigits);
         }
 
         // Update Duck Count display
@@ -517,27 +680,6 @@ public class SetupUIManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Handles the close name panel button press.
-    /// Returns to Quantity mode and slides out the panel.
-    /// </summary>
-    private void OnCloseNamePanelPressed()
-    {
-        if (currentState == SetupState.Names)
-        {
-            currentState = SetupState.Quantity;
-            SlideOutNamePanel();
-            // Khi người chơi đóng panel tên -> coi như quay về chế độ số
-            if (RaceConfig.Instance != null)
-            {
-                RaceConfig.Instance.namePreference = RaceConfig.NameSourcePreference.PreferNumbers;
-            }
-            UpdateToggleStateVisuals();
-            UpdateDisplays();
-            Debug.Log("[SetupUIManager] Exited Name management mode via close button.");
-        }
-    }
-
-    /// <summary>
     /// Handles the Add Name button press.
     /// Adds the input field text as a new duck name.
     /// </summary>
@@ -571,6 +713,10 @@ public class SetupUIManager : MonoBehaviour
             UpdateDisplays();
 
             Debug.Log($"[SetupUIManager] Added new name: {newName}");
+
+            // Keep focus on input field for continuous input
+            inputFieldDuckName.Select();
+            inputFieldDuckName.ActivateInputField();
         }
     }
 
@@ -580,6 +726,50 @@ public class SetupUIManager : MonoBehaviour
     private void OnInputFieldSubmit(string text)
     {
         OnAddNamePressed();
+    }
+
+    private void OnClearNamesPressed()
+    {
+        StartCoroutine(AnimateClearAllNames());
+    }
+
+    private IEnumerator AnimateClearAllNames()
+    {
+        if (nameItemInstances.Count == 0)
+        {
+            if (DataManager.Instance != null)
+            {
+                DataManager.Instance.ClearAllDuckNames();
+            }
+            RefreshNameList();
+            UpdateDisplays();
+            yield break;
+        }
+
+        float delayBetweenItems = 0.08f;
+        List<GameObject> itemsToDestroy = new List<GameObject>(nameItemInstances);
+
+        for (int i = 0; i < itemsToDestroy.Count; i++)
+        {
+            GameObject item = itemsToDestroy[i];
+            if (item != null)
+            {
+                StartCoroutine(AnimateItemShrinkAndDestroy(item.transform, 0.2f));
+            }
+            yield return new WaitForSeconds(delayBetweenItems);
+        }
+
+        yield return new WaitForSeconds(0.25f);
+
+        if (DataManager.Instance != null)
+        {
+            DataManager.Instance.ClearAllDuckNames();
+        }
+
+        nameItemInstances.Clear();
+        UpdateDisplays();
+
+        Debug.Log("[SetupUIManager] Cleared all names.");
     }
 
     /// <summary>
@@ -659,7 +849,7 @@ public class SetupUIManager : MonoBehaviour
             if (btn.name.Contains("Remove") || btn.name.Contains("Delete") || 
                 (btnText != null && btnText.text == "X"))
             {
-                btn.onClick.AddListener(() => OnRemoveNamePressed(index));
+                btn.onClick.AddListener(() => OnRemoveNameFromItem(item));
             }
             // Check for edit/click-to-edit functionality on the main item
             else if (btn.name.Contains("Edit") || btn.name.Contains("Name"))
@@ -735,19 +925,66 @@ public class SetupUIManager : MonoBehaviour
 
     /// <summary>
     /// Handles the remove "X" button press for a name item.
+    /// Finds the index dynamically to avoid closure index capture issues.
+    /// </summary>
+    private void OnRemoveNameFromItem(GameObject item)
+    {
+        if (item == null) return;
+
+        int index = nameItemInstances.IndexOf(item);
+        if (index >= 0)
+        {
+            StartCoroutine(AnimateRemoveAndRefresh(item, index));
+        }
+    }
+
+    /// <summary>
+    /// Handles the remove "X" button press for a name item (legacy, by index).
     /// </summary>
     /// <param name="index">The index of the name to remove.</param>
     private void OnRemoveNamePressed(int index)
+    {
+        if (index >= 0 && index < nameItemInstances.Count)
+        {
+            GameObject itemToRemove = nameItemInstances[index];
+            if (itemToRemove != null)
+            {
+                StartCoroutine(AnimateRemoveAndRefresh(itemToRemove, index));
+            }
+        }
+        else
+        {
+            OnRemoveNamePressedImmediate(index);
+        }
+    }
+
+    private IEnumerator AnimateRemoveAndRefresh(GameObject item, int index)
+    {
+        yield return StartCoroutine(AnimateItemShrinkAndDestroy(item.transform, 0.25f));
+
+        if (DataManager.Instance != null)
+        {
+            DataManager.Instance.RemoveDuckNameAt(index);
+        }
+
+        if (nameItemInstances.Contains(item))
+        {
+            nameItemInstances.Remove(item);
+        }
+
+        UpdateDisplays();
+
+        Debug.Log($"[SetupUIManager] Removed name at index {index}");
+    }
+
+    private void OnRemoveNamePressedImmediate(int index)
     {
         if (DataManager.Instance != null)
         {
             DataManager.Instance.RemoveDuckNameAt(index);
         }
 
-        // Refresh the list to update UI
         RefreshNameList();
-
-        // Update displays (duck count will auto-update)
         UpdateDisplays();
 
         Debug.Log($"[SetupUIManager] Removed name at index {index}");
@@ -833,11 +1070,7 @@ public class SetupUIManager : MonoBehaviour
     /// </summary>
     public int GetTimeValue()
     {
-        if (int.TryParse(timeValueString, out int value))
-        {
-            return value;
-        }
-        return 0;
+        return TimeDigitsToSeconds(timeDigits);
     }
 
     /// <summary>

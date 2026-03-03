@@ -737,6 +737,12 @@ public class RaceController : MonoBehaviour
         PauseAllScrollers();
         ResetAllScrollers();
 
+        var leaderboardUI = FindObjectOfType<LeaderboardUI>(true);
+        if (leaderboardUI != null)
+        {
+            leaderboardUI.ResetUI();
+        }
+
         // Reset finish line to initial position
         ResetFinishLine();
 
@@ -848,9 +854,10 @@ public class RaceController : MonoBehaviour
     private void DisplayLeaderboard()
     {
         // Find LeaderboardUI if exists
-        var leaderboardUI = FindObjectOfType<LeaderboardUI>();
+        var leaderboardUI = FindObjectOfType<LeaderboardUI>(true);
         if (leaderboardUI != null)
         {
+            leaderboardUI.Show();
             // Convert ducks list to List<DuckBrain> for the leaderboard
             leaderboardUI.UpdateLeaderboard(ducks);
         }

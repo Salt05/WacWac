@@ -16,6 +16,12 @@ public class LeaderboardUI : MonoBehaviour
     [SerializeField] private Transform contentRoot;
     [SerializeField] private LeaderboardRow rowPrefab;
 
+    [Header("Top 3 Prefab")]
+    [SerializeField] private LeaderboardRow top3Prefab;
+    [SerializeField] private Sprite top1Sprite;
+    [SerializeField] private Sprite top2Sprite;
+    [SerializeField] private Sprite top3Sprite;
+
     [Header("Legacy Top3 (optional)")]
     [SerializeField] private TextMeshProUGUI firstText;
     [SerializeField] private TextMeshProUGUI secondText;
@@ -25,8 +31,25 @@ public class LeaderboardUI : MonoBehaviour
     [Tooltip("Update leaderboard every N seconds during race (0 = only at finish)")]
     [SerializeField] private float updateInterval = 0.5f;
 
+    [Tooltip("Hide the leaderboard GameObject until the race finishes")]
+    [SerializeField] private bool hideUntilFinish = true;
+
+    [Header("Spawn Effect")]
+    [Tooltip("Apply scale pop effect to first N ranks when rows are spawned")]
+    [SerializeField] private int spawnEffectCount = 5;
+    [SerializeField] private float spawnScaleStart = 0.7f;
+    [SerializeField] private float spawnScaleDuration = 0.35f;
+
     private readonly List<LeaderboardRow> spawnedRows = new List<LeaderboardRow>();
     private float nextUpdateTime;
+
+    private void Start()
+    {
+        if (hideUntilFinish)
+        {
+            gameObject.SetActive(false);
+        }
+    }
 
     private void Update()
     {
@@ -96,28 +119,17 @@ public class LeaderboardUI : MonoBehaviour
 
     private void UpdateDynamic(List<DuckBrain> ducks)
     {
-        // Ensure enough rows
-        while (spawnedRows.Count < ducks.Count)
-        {
-            var row = Instantiate(rowPrefab, contentRoot);
-            spawnedRows.Add(row);
-        }
+        EnsureRowsForCount(ducks.Count);
 
-        // Disable extra rows
-        for (int i = 0; i < spawnedRows.Count; i++)
-        {
-            spawnedRows[i].gameObject.SetActive(i < ducks.Count);
-        }
-
-        // Update each row
         for (int i = 0; i < ducks.Count; i++)
         {
             var duck = ducks[i];
             string name = ResolveDuckName(duck, i);
-            
-            // Display Progress value (0-100) as score
+
             int progressScore = Mathf.RoundToInt(duck.CurrentP);
-            spawnedRows[i].Bind(i + 1, name, progressScore);
+            bool showRank = i >= 3;
+            Sprite rankSprite = GetTopSpriteForIndex(i);
+            spawnedRows[i].Bind(i + 1, name, progressScore, showRank, rankSprite);
         }
     }
 
@@ -149,25 +161,118 @@ public class LeaderboardUI : MonoBehaviour
 
     private void UpdateDynamicFromMover(List<DuckMover> ducks)
     {
-        // Ensure enough rows
-        while (spawnedRows.Count < ducks.Count)
-        {
-            var row = Instantiate(rowPrefab, contentRoot);
-            spawnedRows.Add(row);
-        }
-
-        // Disable extra
-        for (int i = 0; i < spawnedRows.Count; i++)
-        {
-            spawnedRows[i].gameObject.SetActive(i < ducks.Count);
-        }
+        EnsureRowsForCount(ducks.Count);
 
         for (int i = 0; i < ducks.Count; i++)
         {
             var dm = ducks[i];
             string name = ResolveDuckNameFromMover(dm, i);
             int score = dm != null ? Mathf.RoundToInt(dm.GetWorldX()) : 0;
-            spawnedRows[i].Bind(i + 1, name, score);
+            bool showRank = i >= 3;
+            Sprite rankSprite = GetTopSpriteForIndex(i);
+            spawnedRows[i].Bind(i + 1, name, score, showRank, rankSprite);
+        }
+    }
+
+    private void EnsureRowsForCount(int count)
+    {
+        if (contentRoot == null) return;
+
+        while (spawnedRows.Count < count)
+        {
+            int index = spawnedRows.Count;
+            var prefab = GetPrefabForRankIndex(index);
+            if (prefab == null) break;
+
+            var row = Instantiate(prefab, contentRoot);
+            spawnedRows.Add(row);
+
+            if (index < spawnEffectCount)
+            {
+                StartCoroutine(PlaySpawnEffect(row.transform));
+            }
+        }
+
+        for (int i = 0; i < spawnedRows.Count; i++)
+        {
+            spawnedRows[i].gameObject.SetActive(i < count);
+        }
+    }
+
+    private LeaderboardRow GetPrefabForRankIndex(int index)
+    {
+        if (index < 3 && top3Prefab != null) return top3Prefab;
+        return rowPrefab;
+    }
+
+    private Sprite GetTopSpriteForIndex(int index)
+    {
+        switch (index)
+        {
+            case 0:
+                return top1Sprite;
+            case 1:
+                return top2Sprite;
+            case 2:
+                return top3Sprite;
+            default:
+                return null;
+        }
+    }
+
+    private System.Collections.IEnumerator PlaySpawnEffect(Transform target)
+    {
+        if (target == null) yield break;
+
+        float elapsed = 0f;
+        Vector3 start = Vector3.one * spawnScaleStart;
+        Vector3 end = Vector3.one;
+        target.localScale = start;
+
+        while (elapsed < spawnScaleDuration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(elapsed / spawnScaleDuration);
+            float eased = EaseOutCubic(t);
+            target.localScale = Vector3.LerpUnclamped(start, end, eased);
+            yield return null;
+        }
+
+        target.localScale = end;
+    }
+
+    private static float EaseOutCubic(float t)
+    {
+        t = Mathf.Clamp01(t);
+        return 1f - Mathf.Pow(1f - t, 3f);
+    }
+
+    public void Show()
+    {
+        gameObject.SetActive(true);
+    }
+
+    public void ResetUI()
+    {
+        if (spawnedRows.Count > 0)
+        {
+            for (int i = 0; i < spawnedRows.Count; i++)
+            {
+                if (spawnedRows[i] != null)
+                {
+                    Destroy(spawnedRows[i].gameObject);
+                }
+            }
+            spawnedRows.Clear();
+        }
+
+        if (firstText != null) firstText.text = string.Empty;
+        if (secondText != null) secondText.text = string.Empty;
+        if (thirdText != null) thirdText.text = string.Empty;
+
+        if (hideUntilFinish)
+        {
+            gameObject.SetActive(false);
         }
     }
 
