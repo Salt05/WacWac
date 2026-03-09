@@ -51,13 +51,35 @@ public class RaceController : MonoBehaviour
     public TextMeshProUGUI countdownText;
     public Button startButton;
     public Button pauseButton;   // Được dùng như nút toggle Pause/Continue
-    public Button continueButton; // Không còn dùng, giữ lại chỉ để không vỡ Inspector cũ
     public Button clearButton;
     public Button backButton;
 
     [Header("Pause Toggle Visuals")]
     [SerializeField] private Sprite pauseSprite;     // Sprite mặc định (Pause)
     [SerializeField] private Sprite continueSprite;  // Sprite khi đang Paused (Continue)
+
+    [Header("UI SFX")]
+    [SerializeField] private AudioClip buttonClickClip;
+    [SerializeField, Range(0f, 1f)] private float buttonClickVolume = 0.8f;
+    [SerializeField] private AudioSource uiAudioSource;
+
+    [Header("Duck SFX")]
+    [SerializeField] private AudioClip[] duckQuackClips;
+    [SerializeField, Range(0f, 1f)] private float duckQuackVolume = 0.8f;
+    [SerializeField] private AudioSource duckQuackSource;
+    [Tooltip("Slowest interval (seconds) when duck count is low.")]
+    [SerializeField] private float quackIntervalMax = 2.5f;
+    [Tooltip("Fastest interval (seconds) when duck count is high.")]
+    [SerializeField] private float quackIntervalMin = 0.4f;
+    [Tooltip("Duck count at which quacks reach max rate.")]
+    [SerializeField] private int quackRateMaxDucks = 20;
+    [Tooltip("Extra random rest time added between quacks.")]
+    [SerializeField] private Vector2 quackRestRange = new Vector2(3f, 5f);
+
+    [Header("Finish SFX")]
+    [SerializeField] private AudioClip[] finishClips;
+    [SerializeField, Range(0f, 1f)] private float finishVolume = 0.9f;
+    [SerializeField] private AudioSource finishAudioSource;
     
     [Header("Intro Flag Animation")]
     [SerializeField] private Transform flagImage;   // Flag_Image trong RaceScene (UI hoặc world)
@@ -188,6 +210,10 @@ public class RaceController : MonoBehaviour
         if (pauseButton != null) pauseButton.onClick.AddListener(OnPauseTogglePressed);
         if (clearButton != null) clearButton.onClick.AddListener(OnClearPressed);
         if (backButton != null) backButton.onClick.AddListener(OnBackPressed);
+        if (startButton != null) startButton.onClick.AddListener(PlayButtonClick);
+        if (pauseButton != null) pauseButton.onClick.AddListener(PlayButtonClick);
+        if (clearButton != null) clearButton.onClick.AddListener(PlayButtonClick);
+        if (backButton != null) backButton.onClick.AddListener(PlayButtonClick);
 
         // Load config from RaceConfig singleton if available
         if (RaceConfig.Instance != null)
@@ -197,9 +223,125 @@ public class RaceController : MonoBehaviour
         }
 
         StartCoroutine(InitializeRace());
+        StartDuckQuackLoops();
 
         // Khởi tạo sprite nút pause/continue theo trạng thái ban đầu
         UpdatePauseButtonVisual();
+    }
+
+    private void StartDuckQuackLoops()
+    {
+        if (duckQuackClips == null || duckQuackClips.Length == 0)
+        {
+            return;
+        }
+
+        for (int i = 0; i < duckQuackClips.Length; i++)
+        {
+            AudioClip clip = duckQuackClips[i];
+            if (clip != null)
+            {
+                StartCoroutine(DuckQuackLoopForClip(clip));
+            }
+        }
+    }
+
+    private IEnumerator DuckQuackLoopForClip(AudioClip clip)
+    {
+        // Randomize first start so different clips do not sync.
+        float initialDelay = UnityEngine.Random.Range(0f, Mathf.Max(0.01f, quackRestRange.y));
+        if (initialDelay > 0f)
+        {
+            yield return new WaitForSecondsRealtime(initialDelay);
+        }
+
+        while (true)
+        {
+            yield return new WaitUntil(() => state == GameState.Running);
+
+            float delay = GetQuackIntervalSeconds() + GetQuackRestSeconds();
+            if (delay > 0f)
+            {
+                yield return new WaitForSecondsRealtime(delay);
+            }
+
+            if (state != GameState.Running)
+            {
+                continue;
+            }
+
+            PlayQuackClip(clip);
+        }
+    }
+
+    private float GetQuackIntervalSeconds()
+    {
+        if (duckQuackClips == null || duckQuackClips.Length == 0)
+        {
+            return 0f;
+        }
+
+        int ducks = Mathf.Max(1, duckCount);
+        float t = Mathf.Clamp01(ducks / (float)Mathf.Max(1, quackRateMaxDucks));
+        float interval = Mathf.Lerp(quackIntervalMax, quackIntervalMin, t);
+        float jitter = UnityEngine.Random.Range(0.85f, 1.15f);
+        return Mathf.Max(0.05f, interval * jitter);
+    }
+
+    private float GetQuackRestSeconds()
+    {
+        if (duckQuackClips == null || duckQuackClips.Length == 0)
+        {
+            return 0f;
+        }
+
+        float min = Mathf.Max(0f, quackRestRange.x);
+        float max = Mathf.Max(min, quackRestRange.y);
+        return UnityEngine.Random.Range(min, max);
+    }
+
+    private void PlayQuackClip(AudioClip clip)
+    {
+        if (clip == null)
+        {
+            return;
+        }
+
+        AudioSource source = duckQuackSource;
+        if (source == null)
+        {
+            source = GetComponent<AudioSource>();
+            if (source == null)
+            {
+                source = gameObject.AddComponent<AudioSource>();
+            }
+            source.playOnAwake = false;
+            duckQuackSource = source;
+        }
+
+        source.PlayOneShot(clip, duckQuackVolume);
+    }
+
+    private void PlayButtonClick()
+    {
+        if (buttonClickClip == null)
+        {
+            return;
+        }
+
+        AudioSource source = uiAudioSource;
+        if (source == null)
+        {
+            source = GetComponent<AudioSource>();
+            if (source == null)
+            {
+                source = gameObject.AddComponent<AudioSource>();
+            }
+            source.playOnAwake = false;
+            uiAudioSource = source;
+        }
+
+        source.PlayOneShot(buttonClickClip, buttonClickVolume);
     }
 
     private void Update()
@@ -639,46 +781,6 @@ public class RaceController : MonoBehaviour
         return spawnArea;
     }
 
-    /// <summary>
-    /// Get current rank of a duck (1 = leader)
-    /// </summary>
-    public int GetCurrentRank(int duckId)
-    {
-        // Sort by current P descending
-        List<(int id, float p)> sorted = new List<(int, float)>();
-        for (int i = 0; i < ducks.Count; i++)
-        {
-            sorted.Add((i, ducks[i].CurrentP));
-        }
-        sorted.Sort((a, b) => b.p.CompareTo(a.p));
-
-        for (int i = 0; i < sorted.Count; i++)
-        {
-            if (sorted[i].id == duckId)
-                return i + 1; // 1-indexed rank
-        }
-        return ducks.Count;
-    }
-
-    /// <summary>
-    /// Get leader's current P
-    /// </summary>
-    public float GetLeaderP()
-    {
-        float maxP = float.MinValue;
-        for (int i = 0; i < ducks.Count; i++)
-        {
-            if (ducks[i].CurrentP > maxP)
-                maxP = ducks[i].CurrentP;
-        }
-        return maxP;
-    }
-
-    /// <summary>
-    /// Get total duck count
-    /// </summary>
-    public int GetDuckCount() => ducks.Count;
-
     #endregion
 
     #region Race Flow
@@ -823,6 +925,8 @@ public class RaceController : MonoBehaviour
     {
         state = GameState.Finished;
 
+        PlayFinishSound();
+
         // Pause background scrollers
         PauseAllScrollers();
 
@@ -836,6 +940,33 @@ public class RaceController : MonoBehaviour
         DisplayLeaderboard();
 
         Debug.Log("Race Finished!");
+    }
+
+    private void PlayFinishSound()
+    {
+        if (finishClips == null || finishClips.Length == 0)
+        {
+            return;
+        }
+
+        AudioSource source = finishAudioSource;
+        if (source == null)
+        {
+            source = GetComponent<AudioSource>();
+            if (source == null)
+            {
+                source = gameObject.AddComponent<AudioSource>();
+            }
+            source.playOnAwake = false;
+            finishAudioSource = source;
+        }
+
+        int idx = UnityEngine.Random.Range(0, finishClips.Length);
+        AudioClip clip = finishClips[idx];
+        if (clip != null)
+        {
+            source.PlayOneShot(clip, finishVolume);
+        }
     }
 
     /// <summary>

@@ -1235,11 +1235,26 @@ MonoBehaviour:
   countdownText: {fileID: 1090227195}
   startButton: {fileID: 126582266}
   pauseButton: {fileID: 2142231315}
-  continueButton: {fileID: 378415015}
   clearButton: {fileID: 224628478}
   backButton: {fileID: 1541176068}
   pauseSprite: {fileID: 21300000, guid: 8dd4d200afcba0a4f9564fe397641d23, type: 3}
   continueSprite: {fileID: 21300000, guid: 13fe2e0d54ad67446a16f36073b1cc4f, type: 3}
+  buttonClickClip: {fileID: 8300000, guid: c6c3a01ab2ce858488ea6383d97ea747, type: 3}
+  buttonClickVolume: 0.8
+  uiAudioSource: {fileID: 0}
+  duckQuackClips:
+  - {fileID: 8300000, guid: 11406c36115127044b97ddef6fab22d1, type: 3}
+  - {fileID: 8300000, guid: 2a6023991f068724987cdecd58710197, type: 3}
+  duckQuackVolume: 0.604
+  duckQuackSource: {fileID: 0}
+  quackIntervalMax: 2.5
+  quackIntervalMin: 0.4
+  quackRateMaxDucks: 20
+  quackRestRange: {x: 2, y: 4}
+  finishClips:
+  - {fileID: 8300000, guid: 6988185bae701034cbf0458afc2ba8ff, type: 3}
+  finishVolume: 0.276
+  finishAudioSource: {fileID: 0}
   flagImage: {fileID: 1689467424}
   targetA: {fileID: 1620596828}
   flagMoveDuration: 1.5
@@ -2068,6 +2083,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: Flag_Image
       objectReference: {fileID: 0}
+    - target: {fileID: 5808795581797414439, guid: e5423a0835bff22489d5837aaec07989, type: 3}
+      propertyPath: m_IsActive
+      value: 1
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -2088,6 +2107,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1694769502}
   - component: {fileID: 1694769501}
+  - component: {fileID: 1694769503}
   m_Layer: 0
   m_Name: MainCamera
   m_TagString: MainCamera
@@ -2161,6 +2181,14 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!81 &1694769503
+AudioListener:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1694769500}
+  m_Enabled: 1
 --- !u!1 &2032099463
 GameObject:
   m_ObjectHideFlags: 0

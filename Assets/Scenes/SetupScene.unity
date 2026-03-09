@@ -380,7 +380,19 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 80512798}
   m_OnClick:
     m_PersistentCalls:
-      m_Calls: []
+      m_Calls:
+      - m_Target: {fileID: 11500000, guid: d21e5fa792654d0479e7e2df1501a2f3, type: 3}
+        m_TargetAssemblyTypeName: 
+        m_MethodName: 
+        m_Mode: 1
+        m_Arguments:
+          m_ObjectArgument: {fileID: 0}
+          m_ObjectArgumentAssemblyTypeName: 
+          m_IntArgument: 0
+          m_FloatArgument: 0
+          m_StringArgument: 
+          m_BoolArgument: 0
+        m_CallState: 2
 --- !u!114 &80512798
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2949,6 +2961,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1253911542}
   - component: {fileID: 1253911543}
+  - component: {fileID: 1253911544}
   m_Layer: 0
   m_Name: SetupUIManager
   m_TagString: Untagged
@@ -3010,18 +3023,115 @@ MonoBehaviour:
   prefabNameItem: {fileID: 6864916115942493748, guid: ec263650d59ffb14a972ecb8dcc81374, type: 3}
   normalColor: {r: 1, g: 1, b: 1, a: 1}
   activeColor: {r: 0.7, g: 0.7, b: 0.7, a: 1}
-  pressedColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
   imageToggleState: {fileID: 2130797192}
   spriteSetNames: {fileID: 21300000, guid: a6478bef253af5947a56cdd3b36f50bb, type: 3}
   spriteSetQuantity: {fileID: 21300000, guid: ab7cee04b6bbecb469b5c3f9e707e4a9, type: 3}
   panelSlideDuration: 0.5
   panelHiddenPosition: {x: 800, y: 0}
   panelVisiblePosition: {x: 0, y: 0}
+  buttonClickClip: {fileID: 8300000, guid: c6c3a01ab2ce858488ea6383d97ea747, type: 3}
+  buttonClickVolume: 1
+  uiAudioSource: {fileID: 1253911544}
   boardSelectScale: 1.12
   boardSelectDuration: 0.28
-  maxTimeValue: 999
   maxDuckCount: 100
   maxNameLength: 10
+--- !u!82 &1253911544
+AudioSource:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1253911541}
+  m_Enabled: 1
+  serializedVersion: 4
+  OutputAudioMixerGroup: {fileID: 0}
+  m_audioClip: {fileID: 8300000, guid: 7677edb4dbcf38e49987bc0908f91292, type: 3}
+  m_PlayOnAwake: 1
+  m_Volume: 0.794
+  m_Pitch: 1
+  Loop: 1
+  Mute: 0
+  Spatialize: 0
+  SpatializePostEffects: 0
+  Priority: 128
+  DopplerLevel: 1
+  MinDistance: 1
+  MaxDistance: 500
+  Pan2D: 0
+  rolloffMode: 0
+  BypassEffects: 0
+  BypassListenerEffects: 0
+  BypassReverbZones: 0
+  rolloffCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  panLevelCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  spreadCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  reverbZoneMixCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
 --- !u!1 &1312301822
 GameObject:
   m_ObjectHideFlags: 0

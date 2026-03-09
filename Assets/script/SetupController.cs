@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -38,6 +36,11 @@ public class SetupController : MonoBehaviour
     public int defaultTimeSeconds = 15;
     public int defaultDuckCount = 10;
 
+    [Header("UI SFX")]
+    [SerializeField] private AudioClip buttonClickClip;
+    [SerializeField, Range(0f, 1f)] private float buttonClickVolume = 0.8f;
+    [SerializeField] private AudioSource uiAudioSource;
+
     private InputMode mode = InputMode.Time;
 
     // buffers
@@ -51,12 +54,18 @@ public class SetupController : MonoBehaviour
         {
             int n = i;
             digitButtons[i].onClick.AddListener(() => OnDigit(n));
+            digitButtons[i].onClick.AddListener(PlayButtonClick);
         }
         clearButton.onClick.AddListener(OnClear);
+        clearButton.onClick.AddListener(PlayButtonClick);
         modeTimeButton.onClick.AddListener(() => SetMode(InputMode.Time));
+        modeTimeButton.onClick.AddListener(PlayButtonClick);
         modeDuckButton.onClick.AddListener(() => { SetMode(InputMode.DuckCount); OnModeDuckClicked(); });
+        modeDuckButton.onClick.AddListener(PlayButtonClick);
         setNamesButton.onClick.AddListener(OnSetNamesPressed);
+        setNamesButton.onClick.AddListener(PlayButtonClick);
         okButton.onClick.AddListener(OnOK);
+        okButton.onClick.AddListener(PlayButtonClick);
 
         // init from RaceConfig if exists
         if (RaceConfig.Instance != null)
@@ -71,6 +80,28 @@ public class SetupController : MonoBehaviour
         }
 
         SetMode(InputMode.Time);
+    }
+
+    private void PlayButtonClick()
+    {
+        if (buttonClickClip == null)
+        {
+            return;
+        }
+
+        AudioSource source = uiAudioSource;
+        if (source == null)
+        {
+            source = GetComponent<AudioSource>();
+            if (source == null)
+            {
+                source = gameObject.AddComponent<AudioSource>();
+            }
+            source.playOnAwake = false;
+            uiAudioSource = source;
+        }
+
+        source.PlayOneShot(buttonClickClip, buttonClickVolume);
     }
 
     private void SetMode(InputMode m)

@@ -96,7 +96,6 @@ public class SetupUIManager : MonoBehaviour
     [Header("Visual Settings")]
     [SerializeField] private Color normalColor = Color.white;           // Normal button color
     [SerializeField] private Color activeColor = new Color(0.7f, 0.7f, 0.7f, 1f);  // Darkened active button color
-    [SerializeField] private Color pressedColor = new Color(0.5f, 0.5f, 0.5f, 1f); // Darkened pressed button color
 
     [Header("Toggle State Visuals")]
     [SerializeField] private Image imageToggleState;                 // Image component (SI) inside Btn_ToggleState
@@ -108,12 +107,16 @@ public class SetupUIManager : MonoBehaviour
     [SerializeField] private Vector2 panelHiddenPosition = new Vector2(800f, 0f);   // Off-screen position (right)
     [SerializeField] private Vector2 panelVisiblePosition = new Vector2(0f, 0f);    // On-screen position
 
+    [Header("UI SFX")]
+    [SerializeField] private AudioClip buttonClickClip;
+    [SerializeField, Range(0f, 1f)] private float buttonClickVolume = 0.8f;
+    [SerializeField] private AudioSource uiAudioSource;
+
     [Header("Board Select Animation")]
     [SerializeField] private float boardSelectScale = 1.12f;
     [SerializeField] private float boardSelectDuration = 0.28f;
 
     [Header("Value Limits")]
-    [SerializeField] private int maxTimeValue = 999;         // Maximum race time value
     [SerializeField] private int maxDuckCount = 99;          // Maximum number of ducks
     [SerializeField] private int maxNameLength = 10;         // Maximum characters per name
 
@@ -124,7 +127,6 @@ public class SetupUIManager : MonoBehaviour
     private SetupState currentState = SetupState.Quantity;
     private ActiveBoard activeBoard = ActiveBoard.Time;
 
-    private string timeValueString = "";
     private string duckCountString = "";
     // Buffer storing entered time digits (newest digit at front).
     // Example entry sequence: press 3 -> "3" (displays 00:03)
@@ -134,7 +136,6 @@ public class SetupUIManager : MonoBehaviour
     private List<GameObject> nameItemInstances = new List<GameObject>();  // Track instantiated name items
 
     private Coroutine panelSlideCoroutine;   // Reference to current slide coroutine
-    private int currentEditingIndex = -1;    // Index of name being edited (-1 = none)
     private Coroutine boardSelectUpCoroutine;
     private Coroutine boardSelectDownCoroutine;
 
@@ -257,6 +258,7 @@ public class SetupUIManager : MonoBehaviour
             if (keypadButtons[i] != null)
             {
                 keypadButtons[i].onClick.AddListener(() => OnKeypadButtonPressed(digit));
+                keypadButtons[i].onClick.AddListener(PlayButtonClick);
             }
         }
 
@@ -264,17 +266,20 @@ public class SetupUIManager : MonoBehaviour
         if (btn_ClearBoard != null)
         {
             btn_ClearBoard.onClick.AddListener(OnClearButtonPressed);
+            btn_ClearBoard.onClick.AddListener(PlayButtonClick);
         }
 
         // Board selection buttons
         if (btn_SelectTime != null)
         {
             btn_SelectTime.onClick.AddListener(() => SelectBoard(ActiveBoard.Time));
+            btn_SelectTime.onClick.AddListener(PlayButtonClick);
         }
 
         if (btn_SelectDucks != null)
         {
             btn_SelectDucks.onClick.AddListener(() => SelectBoard(ActiveBoard.Ducks));
+            btn_SelectDucks.onClick.AddListener(PlayButtonClick);
         }
 
         // Set Names button
@@ -283,18 +288,21 @@ public class SetupUIManager : MonoBehaviour
             // This button now toggles between Quantity <-> Names modes,
             // showing/hiding the name management panel and swapping the SI image.
             btn_SetNames.onClick.AddListener(OnToggleStateButtonPressed);
+            btn_SetNames.onClick.AddListener(PlayButtonClick);
         }
 
         // Add Name button
         if (btn_AddName != null)
         {
             btn_AddName.onClick.AddListener(OnAddNamePressed);
+            btn_AddName.onClick.AddListener(PlayButtonClick);
         }
 
         // Clear Names button
         if (btn_ClearNames != null)
         {
             btn_ClearNames.onClick.AddListener(OnClearNamesPressed);
+            btn_ClearNames.onClick.AddListener(PlayButtonClick);
         }
 
         // Input field submit on Enter key
@@ -303,6 +311,28 @@ public class SetupUIManager : MonoBehaviour
             inputFieldDuckName.onSubmit.AddListener(OnInputFieldSubmit);
             inputFieldDuckName.characterLimit = maxNameLength;
         }
+    }
+
+    private void PlayButtonClick()
+    {
+        if (buttonClickClip == null)
+        {
+            return;
+        }
+
+        AudioSource source = uiAudioSource;
+        if (source == null)
+        {
+            source = GetComponent<AudioSource>();
+            if (source == null)
+            {
+                source = gameObject.AddComponent<AudioSource>();
+            }
+            source.playOnAwake = false;
+            uiAudioSource = source;
+        }
+
+        source.PlayOneShot(buttonClickClip, buttonClickVolume);
     }
 
     #endregion
@@ -507,30 +537,6 @@ public class SetupUIManager : MonoBehaviour
         return t * t * t;
     }
 
-    private IEnumerator AnimateItemShrink(Transform target, float duration)
-    {
-        if (target == null) yield break;
-
-        Vector3 startScale = target.localScale;
-        Vector3 endScale = Vector3.zero;
-        float elapsed = 0f;
-
-        while (elapsed < duration)
-        {
-            if (target == null) yield break;
-
-            elapsed += Time.deltaTime;
-            float t = Mathf.Clamp01(elapsed / duration);
-            float eased = EaseOutCubic(t);
-            target.localScale = Vector3.LerpUnclamped(startScale, endScale, eased);
-            yield return null;
-        }
-
-        if (target != null)
-        {
-            target.localScale = endScale;
-        }
-    }
 
     private IEnumerator AnimateItemShrinkAndDestroy(Transform target, float duration)
     {
@@ -844,6 +850,7 @@ public class SetupUIManager : MonoBehaviour
         Button[] buttons = item.GetComponentsInChildren<Button>(true);
         foreach (Button btn in buttons)
         {
+            btn.onClick.AddListener(PlayButtonClick);
             // Check for remove button (named "Btn_Remove" or has "X" text)
             TMP_Text btnText = btn.GetComponentInChildren<TMP_Text>();
             if (btn.name.Contains("Remove") || btn.name.Contains("Delete") || 
@@ -863,6 +870,7 @@ public class SetupUIManager : MonoBehaviour
         if (mainButton != null && editField != null)
         {
             mainButton.onClick.AddListener(() => OnEditNamePressed(index, editField, nameLabel));
+            mainButton.onClick.AddListener(PlayButtonClick);
         }
     }
 
@@ -884,7 +892,6 @@ public class SetupUIManager : MonoBehaviour
         editField.Select();
         editField.ActivateInputField();
 
-        currentEditingIndex = index;
         Debug.Log($"[SetupUIManager] Editing name at index {index}");
     }
 
@@ -920,7 +927,6 @@ public class SetupUIManager : MonoBehaviour
             Debug.Log($"[SetupUIManager] Updated name at index {index} to: {newText}");
         }
 
-        currentEditingIndex = -1;
     }
 
     /// <summary>
@@ -935,26 +941,6 @@ public class SetupUIManager : MonoBehaviour
         if (index >= 0)
         {
             StartCoroutine(AnimateRemoveAndRefresh(item, index));
-        }
-    }
-
-    /// <summary>
-    /// Handles the remove "X" button press for a name item (legacy, by index).
-    /// </summary>
-    /// <param name="index">The index of the name to remove.</param>
-    private void OnRemoveNamePressed(int index)
-    {
-        if (index >= 0 && index < nameItemInstances.Count)
-        {
-            GameObject itemToRemove = nameItemInstances[index];
-            if (itemToRemove != null)
-            {
-                StartCoroutine(AnimateRemoveAndRefresh(itemToRemove, index));
-            }
-        }
-        else
-        {
-            OnRemoveNamePressedImmediate(index);
         }
     }
 

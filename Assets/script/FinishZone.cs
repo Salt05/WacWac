@@ -5,11 +5,4 @@ using UnityEngine;
 // This component is kept for compatibility but does not drive gameplay.
 public class FinishZone : MonoBehaviour
 {
-    public RaceController raceController;
-
-    private void OnTriggerEnter2D(Collider2D other)
-    {
-        // Intentionally left no-op.
-        // (Avoid accidentally finalizing race early due to collider events.)
-    }
 }

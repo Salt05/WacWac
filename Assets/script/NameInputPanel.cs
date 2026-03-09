@@ -3,7 +3,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
-// Panel nh?p tên v?t
+// Panel nh?p tï¿½n v?t
 public class NameInputPanel : MonoBehaviour
 {
     public GameObject root; // panel root
@@ -14,10 +14,17 @@ public class NameInputPanel : MonoBehaviour
     public int maxLines = 99;
     public int charsPerLine = 10;
 
+    [Header("UI SFX")]
+    [SerializeField] private AudioClip buttonClickClip;
+    [SerializeField, Range(0f, 1f)] private float buttonClickVolume = 0.8f;
+    [SerializeField] private AudioSource uiAudioSource;
+
     private void Start()
     {
         if (clearButton != null) clearButton.onClick.AddListener(OnClear);
+        if (clearButton != null) clearButton.onClick.AddListener(PlayButtonClick);
         if (doneButton != null) doneButton.onClick.AddListener(OnDone);
+        if (doneButton != null) doneButton.onClick.AddListener(PlayButtonClick);
         // ensure input allows multiline with Enter
         if (inputField != null)
         {
@@ -25,6 +32,28 @@ public class NameInputPanel : MonoBehaviour
             inputField.onValueChanged.AddListener(OnInputChanged);
         }
         Hide();
+    }
+
+    private void PlayButtonClick()
+    {
+        if (buttonClickClip == null)
+        {
+            return;
+        }
+
+        AudioSource source = uiAudioSource;
+        if (source == null)
+        {
+            source = GetComponent<AudioSource>();
+            if (source == null)
+            {
+                source = gameObject.AddComponent<AudioSource>();
+            }
+            source.playOnAwake = false;
+            uiAudioSource = source;
+        }
+
+        source.PlayOneShot(buttonClickClip, buttonClickVolume);
     }
 
     public void Show()

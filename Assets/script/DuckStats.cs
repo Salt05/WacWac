@@ -58,7 +58,6 @@ public sealed class DuckStats
     [SerializeField] private float targetSpeed;           // Current target speed for this action cycle
     [SerializeField] private float actionDuration;        // Total duration of current action cycle
     [SerializeField] private float actionTimer;           // Time remaining in current action cycle
-    [SerializeField] private bool waitingForPhaseUpdate;  // Waiting to finish cycle before switching to new phase config
 
     [Header("Legacy Compatibility")]
     public Tier tier = Tier.Average;
@@ -73,7 +72,6 @@ public sealed class DuckStats
     public float TargetSpeed => targetSpeed;
     public float ActionDuration => actionDuration;
     public float ActionTimer => actionTimer;
-    public bool IsWaitingForPhaseUpdate => waitingForPhaseUpdate;
 
     /// <summary>Has current action cycle completed?</summary>
     public bool IsActionComplete => actionTimer <= 0f;
@@ -89,7 +87,6 @@ public sealed class DuckStats
         targetSpeed = 0f;
         actionDuration = 0f;
         actionTimer = 0f;
-        waitingForPhaseUpdate = false;
         stamina01 = 1f;
     }
 
@@ -133,7 +130,6 @@ public sealed class DuckStats
         actionDuration = cycleDuration;
         actionTimer = cycleDuration;
 
-        waitingForPhaseUpdate = false;
     }
 
     /// <summary>
@@ -148,15 +144,6 @@ public sealed class DuckStats
     }
 
     /// <summary>
-    /// Mark that this duck should update to new phase config after current action completes.
-    /// Used for Phase 1 -> Phase 2 transition (wait for cycle to finish).
-    /// </summary>
-    public void MarkWaitingForPhaseUpdate()
-    {
-        waitingForPhaseUpdate = true;
-    }
-
-    /// <summary>
     /// Force-stop current action immediately.
     /// Used for Phase 2 -> Phase 3 transition (instant cancel).
     /// </summary>
@@ -165,7 +152,6 @@ public sealed class DuckStats
         actionTimer = 0f;
         currentAction = DuckAction.Idle;
         targetSpeed = 0f;
-        waitingForPhaseUpdate = false;
     }
 
     #endregion
@@ -176,11 +162,6 @@ public sealed class DuckStats
     {
         return a + (b - a) * t;
     }
-
-    /// <summary>
-    /// Stub for legacy compatibility - always returns 1.0 (no stamina system).
-    /// </summary>
-    public float GetStaminaNormalized() => 1f;
 
     #endregion
 }

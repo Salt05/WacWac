@@ -287,14 +287,5 @@ public class DuckBrain : MonoBehaviour
 
     public float GetWorldX() => transform.position.x;
 
-    /// <summary>Stub for legacy compatibility - always returns 1.0</summary>
-    public float GetStamina() => 1f;
-
-    /// <summary>Stub for legacy compatibility - always returns 1.0</summary>
-    public float GetStaminaNormalized() => 1f;
-
-    /// <summary>Stub for legacy compatibility</summary>
-    public DuckStats.Personality GetPersonality() => DuckStats.Personality.Steady;
-
     #endregion
 }

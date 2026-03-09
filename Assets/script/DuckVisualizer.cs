@@ -87,18 +87,6 @@ public sealed class DuckVisualizer : MonoBehaviour
         }
     }
 
-    private static Color GetTierColor(DuckStats.Tier tier)
-    {
-        switch (tier)
-        {
-            case DuckStats.Tier.Slow: return Color.gray;
-            case DuckStats.Tier.Average: return Color.white;
-            case DuckStats.Tier.Fast: return Color.yellow;
-            case DuckStats.Tier.VeryFast: return Color.red;
-            default: return Color.white;
-        }
-    }
-
     // Cubic ease-in-out: slow at ends, faster in middle.
     private static float EaseInOutCubic(float t)
     {

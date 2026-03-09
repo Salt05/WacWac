@@ -11,7 +11,6 @@
 /// </summary>
 public class DuckMover : MonoBehaviour
 {
-    [HideInInspector] public RaceController raceController;
 
     [Header("Stats (for analysis / UI only)")]
     [SerializeField] private DuckStats stats = new DuckStats();
@@ -53,7 +52,6 @@ public class DuckMover : MonoBehaviour
         }
 
         if (brain == null) brain = GetComponent<DuckBrain>();
-        if (raceController == null) raceController = FindObjectOfType<RaceController>();
     }
 
     /// <summary>

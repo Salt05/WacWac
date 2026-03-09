@@ -1,6 +1,3 @@
-using System;
-using System.Collections;
-using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -33,9 +30,13 @@ public class RaceSetupController : MonoBehaviour
     public int maxDucks = 100;
     public int maxHours = 99; // max HH
 
+    [Header("UI SFX")]
+    [SerializeField] private AudioClip buttonClickClip;
+    [SerializeField, Range(0f, 1f)] private float buttonClickVolume = 0.8f;
+    [SerializeField] private AudioSource uiAudioSource;
+
     // internal
     private int[] digits = new int[6]; // right->left: ss mm hh -> [0] = sec ones, [5] = hour tens
-    private bool hasSet = false;
 
     private void Start()
     {
@@ -56,15 +57,42 @@ public class RaceSetupController : MonoBehaviour
         {
             int n = i; // capture
             digitButtons[i].onClick.AddListener(() => OnDigitPressed(n));
+            digitButtons[i].onClick.AddListener(PlayButtonClick);
         }
         clearButton.onClick.AddListener(OnClearPressed);
+        clearButton.onClick.AddListener(PlayButtonClick);
         setButton.onClick.AddListener(OnSetPressed);
+        setButton.onClick.AddListener(PlayButtonClick);
 
         startButton.onClick.AddListener(OnStartPressed);
+        startButton.onClick.AddListener(PlayButtonClick);
         backButton.onClick.AddListener(OnBackPressed);
+        backButton.onClick.AddListener(PlayButtonClick);
 
         // preview
         PopulatePreview();
+    }
+
+    private void PlayButtonClick()
+    {
+        if (buttonClickClip == null)
+        {
+            return;
+        }
+
+        AudioSource source = uiAudioSource;
+        if (source == null)
+        {
+            source = GetComponent<AudioSource>();
+            if (source == null)
+            {
+                source = gameObject.AddComponent<AudioSource>();
+            }
+            source.playOnAwake = false;
+            uiAudioSource = source;
+        }
+
+        source.PlayOneShot(buttonClickClip, buttonClickVolume);
     }
 
     private void ResetDigits()
@@ -86,7 +114,6 @@ public class RaceSetupController : MonoBehaviour
     {
         ResetDigits();
         UpdateTimeText();
-        hasSet = false;
     }
 
     private void OnSetPressed()
@@ -162,7 +189,8 @@ public class RaceSetupController : MonoBehaviour
 
     private int GetTotalSeconds()
     {
-        if (hasSet) return GetTotalSecondsFromDigits();
+        int total = GetTotalSecondsFromDigits();
+        if (total > 0) return total;
         // if not set, return default 15s
         return RaceConfig.Instance != null ? RaceConfig.Instance.durationSeconds : 15;
     }
@@ -207,7 +235,7 @@ public class RaceSetupController : MonoBehaviour
 
     private bool ValidateAndStore()
     {
-        int seconds = hasSet ? GetTotalSecondsFromDigits() : (RaceConfig.Instance != null ? RaceConfig.Instance.durationSeconds : 15);
+        int seconds = GetTotalSeconds();
         if (seconds <= 0)
         {
             Debug.Log("Th?i gian ph?i l?n h?n 0");
