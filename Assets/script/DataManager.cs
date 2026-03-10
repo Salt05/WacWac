@@ -1,19 +1,18 @@
 using System.Collections.Generic;
-using System.IO;
 using UnityEngine;
 
 /// <summary>
 /// DataManager.cs
-/// Simple save/load system for duck names using System.IO.
-/// Stores names in a text file at Application.persistentDataPath.
+/// Save/load system for duck names using PlayerPrefs (backed by localStorage on WebGL).
+/// Data persists across browser reloads without requiring a database.
 /// </summary>
 public class DataManager : MonoBehaviour
 {
     // Singleton instance for easy access
     public static DataManager Instance { get; private set; }
 
-    // The file path where duck names are stored
-    private string filePath;
+    // PlayerPrefs key for duck names
+    private const string PrefsKey = "WacWac_DuckNames";
 
     // In-memory list of duck names
     private List<string> duckNames = new List<string>();
@@ -37,63 +36,38 @@ public class DataManager : MonoBehaviour
             return;
         }
 
-        // Set the file path for duck names storage
-        filePath = Path.Combine(Application.persistentDataPath, "ducknames.txt");
-
         // Load existing names on startup
         LoadDuckNames();
     }
 
     /// <summary>
-    /// Saves the current list of duck names to the text file.
-    /// Each name is written on a separate line.
+    /// Saves the current list of duck names to PlayerPrefs (localStorage on WebGL).
     /// </summary>
     public void SaveDuckNames()
     {
-        try
-        {
-            // Write all names to file, one per line
-            File.WriteAllLines(filePath, duckNames);
-            Debug.Log($"[DataManager] Saved {duckNames.Count} duck names to {filePath}");
-        }
-        catch (IOException e)
-        {
-            Debug.LogError($"[DataManager] Failed to save duck names: {e.Message}");
-        }
+        PlayerPrefs.SetString(PrefsKey, string.Join("\n", duckNames));
+        PlayerPrefs.Save();
+        Debug.Log($"[DataManager] Saved {duckNames.Count} duck names to PlayerPrefs.");
     }
 
     /// <summary>
-    /// Loads duck names from the text file into the in-memory list.
+    /// Loads duck names from PlayerPrefs into the in-memory list.
     /// </summary>
     public void LoadDuckNames()
     {
         duckNames.Clear();
 
-        // Check if file exists before attempting to read
-        if (File.Exists(filePath))
+        string raw = PlayerPrefs.GetString(PrefsKey, string.Empty);
+        if (!string.IsNullOrEmpty(raw))
         {
-            try
+            string[] lines = raw.Split('\n');
+            foreach (string line in lines)
             {
-                // Read all lines and add non-empty ones to the list
-                string[] lines = File.ReadAllLines(filePath);
-                foreach (string line in lines)
-                {
-                    if (!string.IsNullOrWhiteSpace(line))
-                    {
-                        duckNames.Add(line.Trim());
-                    }
-                }
-                Debug.Log($"[DataManager] Loaded {duckNames.Count} duck names from {filePath}");
-            }
-            catch (IOException e)
-            {
-                Debug.LogError($"[DataManager] Failed to load duck names: {e.Message}");
+                if (!string.IsNullOrWhiteSpace(line))
+                    duckNames.Add(line.Trim());
             }
         }
-        else
-        {
-            Debug.Log("[DataManager] No saved duck names file found. Starting fresh.");
-        }
+        Debug.Log($"[DataManager] Loaded {duckNames.Count} duck names from PlayerPrefs.");
     }
 
     /// <summary>
