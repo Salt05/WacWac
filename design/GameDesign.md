@@ -398,6 +398,61 @@ Không sử dụng hệ thống thể lực (Stamina) hay cá tính (Personality
 
 | Hành động | Mô tả |
 |-----------|-------|
-| **Lùi** | Di chuyển lùi một đoạn nhỏ trong thời gian ngắn |
-| **Đứng yên** | Không di chuyển trong một khoảng thời gian |
-| **Tiến** | Di chuyển tiến lên với tốc độ random |
+| **Forward** | Tiến về phía trước (P tăng) |
+| **Idle** | Đứng yên (P không đổi) |
+| **Backward** | Lùi lại (P giảm) |
+
+### Logic hành động
+
+- Mỗi con vịt có một chu kỳ hành động:
+  1. Random thời gian hành động trong khoảng `actionFrequencyRange`.
+  2. Random hành động (Forward / Idle / Backward).
+  3. Random tốc độ (nếu là Forward hoặc Backward).
+  4. Di chuyển theo hàm Cubic từ trạng thái hiện tại → target.
+  5. Lặp lại.
+
+---
+
+## 8. THAM SỐ CẤU HÌNH (CONFIG PARAMETERS)
+
+### RaceConfig
+
+- `RaceDuration`: tổng thời lượng đua.
+- `DuckCount`: số lượng vịt.
+- `Names`: danh sách tên (nếu có).
+- `Skins`: danh sách sprite/skin.
+- `Seed`: seed random (nếu muốn deterministic).
+
+### Phase Config
+
+| Tham số | Ý nghĩa |
+|--------|---------|
+| `ActionFrequencyRange` | Khoảng tần suất random hành động (giây) |
+| `ForwardSpeedRange` | Khoảng tốc độ tiến |
+| `BackwardSpeedRange` | Khoảng tốc độ lùi |
+
+---
+
+## 9. RENDERING & PRESENTATION
+
+### Rendering dựa trên Progress
+
+- Mỗi frame:
+  - `CurrentProgress` → vị trí trên track.
+  - Vịt được render bằng công thức `Lerp(StartPoint, EndPoint, CurrentProgress)`.
+
+### UI
+
+- Countdown / Timer.
+- Finish Line rõ ràng.
+- Leaderboard sau khi race kết thúc.
+- Nút Start / Pause / Clear / Back.
+
+---
+
+## 10. LƯU Ý KỸ THUẬT
+
+- Toàn bộ movement dùng Cubic Ease-In (`t^3`).
+- Phase 2 → Phase 3: cancel action ngay lập tức.
+- Không dùng collision để quyết định thắng.
+- Deterministic với seed.

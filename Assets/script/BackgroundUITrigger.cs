@@ -54,4 +54,6 @@ public class BackgroundUITrigger : MonoBehaviour
         Rect other = new Rect(corners[0].x, corners[0].y, corners[2].x - corners[0].x, corners[2].y - corners[0].y);
         return OverlapsWorldRect(other, margin);
     }
+
+    
 }

@@ -52,14 +52,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6abf5a26c304fb64e9e39103aa03aaab, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  raceController: {fileID: 0}
   stats:
     duckIndex: 0
     currentAction: 1
     targetSpeed: 0
     actionDuration: 0
     actionTimer: 0
-    waitingForPhaseUpdate: 0
     tier: 1
     personality: 0
     stamina01: 1
@@ -130,10 +128,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   uiImage: {fileID: 0}
   worldRenderer: {fileID: 0}
-  showStaminaBar: 0
-  staminaBarOffset: {x: 0, y: 1, z: 0}
-  staminaBarSize: {x: 1.2, y: 0.18}
-  staminaBarBorder: 0.02
   bobHeight: 15
   bobDuration: 2
 --- !u!1 &1323896612055221651

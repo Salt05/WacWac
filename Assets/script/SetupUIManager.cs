@@ -1089,6 +1089,17 @@ public class SetupUIManager : MonoBehaviour
         return 0;
     }
 
+    public void ClickFullscreen()
+    {
+        // Kiểm tra nếu đang ở WebGL
+        #if !UNITY_EDITOR && UNITY_WEBGL
+            Screen.fullScreen = !Screen.fullScreen;
+        #else
+            // Nếu chạy trong Unity Editor để test
+            Debug.Log("Fullscreen toggled!");
+        #endif
+    }
+
     /// <summary>
     /// Gets the current setup state.
     /// </summary>
