@@ -1,4 +1,4 @@
-# Duck Race
+# Duck Race https://play.phatpham.id.vn/
 
 Duck Race là game đua vịt phong cách "xem và cổ vũ". Người chơi chỉ cần thiết lập thời gian, số lượng vịt hoặc tên; sau đó cuộc đua diễn ra tự động với nhịp độ nhanh, vui và dễ theo dõi. Kết quả hiển thị rõ ràng bằng bảng xếp hạng sau mỗi lượt.
 
