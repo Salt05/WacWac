@@ -129,6 +129,25 @@ public class DataManager : MonoBehaviour
     }
 
     /// <summary>
+    /// Replaces the entire duck names list and saves immediately.
+    /// </summary>
+    public void SetDuckNames(IEnumerable<string> names)
+    {
+        duckNames.Clear();
+        foreach (var name in names)
+        {
+            string trimmed = name.Trim();
+            if (!string.IsNullOrWhiteSpace(trimmed))
+            {
+                if (trimmed.Length > 10) trimmed = trimmed.Substring(0, 10);
+                duckNames.Add(trimmed);
+            }
+        }
+        SaveDuckNames();
+        Debug.Log($"[DataManager] SetDuckNames: saved {duckNames.Count} names.");
+    }
+
+    /// <summary>
     /// Gets the count of duck names.
     /// </summary>
     public int GetDuckCount()

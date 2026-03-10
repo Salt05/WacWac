@@ -89,6 +89,8 @@ public class NameInputPanel : MonoBehaviour
             RaceConfig.Instance.duckNames = new string[0];
             RaceConfig.Instance.duckNamesRaw = string.Empty;
         }
+        if (DataManager.Instance != null)
+            DataManager.Instance.ClearAllDuckNames();
     }
 
     private void OnInputChanged(string newText)
@@ -136,6 +138,8 @@ public class NameInputPanel : MonoBehaviour
 
         RaceConfig.Instance.duckNames = names.ToArray();
         RaceConfig.Instance.duckNamesRaw = inputField.text;
+        if (DataManager.Instance != null)
+            DataManager.Instance.SetDuckNames(names);
         Hide();
     }
 }
