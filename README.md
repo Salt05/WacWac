@@ -8,6 +8,10 @@ Duck Race là game đua vịt phong cách "xem và cổ vũ". Người chơi ch�
 - Diễn biến có kịch tính (đầu bám, giữa giãn, cuối bứt tốc)
 - Giao diện gọn: Setup -> Race -> Leaderboard
 
+## Screenshots
+![Home Screen](design/UI_Screenshots/Home_Screen.png)
+![Gameplay](design/UI_Screenshots/Gameplay_1.png)
+
 ## Tài liệu
 - Tổng quan thiết kế: [design/GameDesign.md](design/GameDesign.md)
 - Chi tiết cơ chế và ràng buộc: [design/DesignDetails.md](design/DesignDetails.md)
