@@ -142,4 +142,36 @@ public class NameInputPanel : MonoBehaviour
             DataManager.Instance.SetDuckNames(names);
         Hide();
     }
+
+    /// <summary>
+    /// Inject names imported from an external file (Excel / CSV).
+    /// Saves directly to RaceConfig and DataManager (same as OnDone), then updates the visible field.
+    /// </summary>
+    public void SetImportedText(string multilineText)
+    {
+        // Parse with same limits as OnInputChanged / OnDone
+        var lines = multilineText.Split(new[] { '\n', '\r' }, System.StringSplitOptions.RemoveEmptyEntries);
+        var names = new List<string>();
+        for (int i = 0; i < lines.Length && i < maxLines; i++)
+        {
+            var line = lines[i];
+            if (line.Length > charsPerLine) line = line.Substring(0, charsPerLine);
+            names.Add(line);
+        }
+
+        string rawText = string.Join("\n", names);
+
+        // Persist directly — don't rely on onValueChanged firing
+        if (RaceConfig.Instance != null)
+        {
+            RaceConfig.Instance.duckNames = names.ToArray();
+            RaceConfig.Instance.duckNamesRaw = rawText;
+        }
+        if (DataManager.Instance != null)
+            DataManager.Instance.SetDuckNames(names);
+
+        // Update the visible input field
+        if (inputField != null)
+            inputField.text = rawText;
+    }
 }

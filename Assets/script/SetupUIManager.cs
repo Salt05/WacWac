@@ -781,7 +781,7 @@ public class SetupUIManager : MonoBehaviour
     /// <summary>
     /// Refreshes the name list UI by destroying old items and instantiating new ones.
     /// </summary>
-    private void RefreshNameList()
+    public void RefreshNameList()
     {
         // Clear existing name item instances
         foreach (GameObject item in nameItemInstances)

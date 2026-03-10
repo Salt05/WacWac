@@ -1,0 +1,9 @@
+<!--
+  Prevent IL2CPP from stripping assemblies used by ExcelImporter.cs at runtime.
+  Required for ZipArchive (xlsx parsing) and XmlDocument (sheet parsing) on WebGL.
+-->
+<linker>
+  <assembly fullname="System.IO.Compression" preserve="all"/>
+  <assembly fullname="System.Xml" preserve="all"/>
+  <assembly fullname="System" preserve="all"/>
+</linker>
