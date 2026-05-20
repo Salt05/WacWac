@@ -14,6 +14,7 @@
 .vscode/
 *.csproj
 *.sln
+*.slnx
 .vsconfig
 
 # OS
@@ -23,3 +24,9 @@
 *.log
 *.tmp
 *.bak
+
+# Builds
+[Ww]eb[Gg][Ll]*/
+[Bb]uild/
+[Bb]uilds/
+!docs/Build/
